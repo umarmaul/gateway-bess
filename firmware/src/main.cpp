@@ -4,6 +4,8 @@
 #include "config.h"
 #include "state.h"
 #include "wifi_mgr.h"
+#include "modbus_port.h"
+#include "task_bess.h"
 
 void setup() {
     Serial.begin(115200);           // USB-CDC (COM3)
@@ -13,6 +15,8 @@ void setup() {
     wifiInit();
     configTime(0, 0, "pool.ntp.org", "time.google.com");
     Serial.println("[boot] gateway-bess " FW_VERSION);
+    mbPortInit();
+    taskBessStart();
 }
 
 void loop() {
