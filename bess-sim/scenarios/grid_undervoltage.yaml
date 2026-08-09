@@ -1,0 +1,5 @@
+# Grid drop 30 detik setelah start, pulih di detik 60.
+initial: {soc: 60}
+events:
+  - {at: 30, action: alarm, name: grid_undervoltage, trip: true}
+  - {at: 60, action: clear_alarm, name: grid_undervoltage}

@@ -1,0 +1,4 @@
+initial: {soc: 55}
+events:
+  - {at: 45, action: alarm, name: bms_comm_failure}
+  - {at: 90, action: clear_alarm, name: bms_comm_failure}
