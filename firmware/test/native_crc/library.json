@@ -1,0 +1,7 @@
+{
+  "name": "test_native_crc",
+  "version": "0.1.0",
+  "description": "Native CRC16 test suite",
+  "frameworks": "*",
+  "platforms": "*"
+}
