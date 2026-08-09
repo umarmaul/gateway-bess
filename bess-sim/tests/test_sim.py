@@ -79,3 +79,42 @@ def test_over_discharge_otomatis():
     tick(sim, 60)                      # kuras sampai <2%
     assert sim.sm.state == St.FAULT
     assert read(sim, 2055, 1)[0] & (1 << 14)   # battery over-discharge
+
+def test_status_word_tahapan_via_register_2057():
+    """Baca register 2057 via Modbus di setiap tahap transisi startup."""
+    sim = BessSim(soc=0.5)
+    sim.handle_frame(ON)
+    tick(sim, 0.1)  # minimal tick agar tick() memajukan ke PRECHARGE & mapper menulis 2057
+
+    # PRECHARGE: bit 0 saja (dc_precharge)
+    w = read(sim, 2057, 1)[0]
+    assert sim.sm.state == St.PRECHARGE
+    assert w & (1 << 0), f"PRECHARGE harus punya bit0, got {bin(w)}"
+    assert not (w & (1 << 1)), f"PRECHARGE tidak boleh punya bit1, got {bin(w)}"
+    assert not (w & (1 << 2)), f"PRECHARGE tidak boleh punya bit2, got {bin(w)}"
+    assert not (w & (1 << 3)), f"PRECHARGE tidak boleh punya bit3, got {bin(w)}"
+
+    tick(sim, 1.1)  # ke SOFTSTART
+    w = read(sim, 2057, 1)[0]
+    assert sim.sm.state == St.SOFTSTART
+    assert w & (1 << 0), f"SOFTSTART harus punya bit0, got {bin(w)}"
+    assert w & (1 << 1), f"SOFTSTART harus punya bit1, got {bin(w)}"
+    assert not (w & (1 << 2)), f"SOFTSTART tidak boleh punya bit2, got {bin(w)}"
+    assert not (w & (1 << 3)), f"SOFTSTART tidak boleh punya bit3, got {bin(w)}"
+
+    tick(sim, 1.1)  # ke RELAY
+    w = read(sim, 2057, 1)[0]
+    assert sim.sm.state == St.RELAY
+    assert w & (1 << 0), f"RELAY harus punya bit0, got {bin(w)}"
+    assert w & (1 << 1), f"RELAY harus punya bit1, got {bin(w)}"
+    assert w & (1 << 2), f"RELAY harus punya bit2, got {bin(w)}"
+    assert not (w & (1 << 3)), f"RELAY tidak boleh punya bit3, got {bin(w)}"
+
+    tick(sim, 1.1)  # ke RUN
+    w = read(sim, 2057, 1)[0]
+    assert sim.sm.state == St.RUN
+    assert w & (1 << 0), f"RUN harus punya bit0, got {bin(w)}"
+    assert w & (1 << 1), f"RUN harus punya bit1, got {bin(w)}"
+    assert w & (1 << 2), f"RUN harus punya bit2, got {bin(w)}"
+    assert w & (1 << 3), f"RUN harus punya bit3, got {bin(w)}"
+    assert w & (1 << 6), f"RUN harus punya bit6 (run), got {bin(w)}"

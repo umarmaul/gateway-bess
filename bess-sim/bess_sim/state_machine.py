@@ -55,12 +55,12 @@ class StateMachine:
     def status_word(self, charging: bool) -> int:
         s, w = self.state, 0
         stage = {St.PRECHARGE: 0, St.SOFTSTART: 1, St.RELAY: 2}.get(s)
-        closed = 4 if s in (St.RUN, St.STOPPING) else (stage or 0)
+        closed = 4 if s in (St.RUN, St.STOPPING) else (stage + 1 if stage is not None else 0)
         if s in (St.RUN, St.STOPPING) or stage is not None:
             for b in range(min(closed, 4)):
                 w |= 1 << b
         if s == St.RUN:
-            w |= 0b1111 | (1 << 6)
+            w |= 1 << 6
         if charging and s == St.RUN:
             w |= 1 << 5
         if s == St.FAULT:
