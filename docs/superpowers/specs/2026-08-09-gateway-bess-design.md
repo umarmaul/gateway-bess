@@ -139,7 +139,7 @@ Perkiraan ukuran ±2–3 KB (vs 14 KB DCON).
 |---|---|---|
 | `{"cmd":"enable"}` | FC6 `5050=0xFF00` → tunggu bit Run di 2057 ≤10 dtk | `ok` / `error: bess_no_ack`, `bess_fault`, `comm_lost` |
 | `{"cmd":"disable"}` | `5050=0x0000` → tunggu Stop | idem |
-| `{"cmd":"set_power","args":{"power_w":5000}}` | validasi: tolak bila \|power_w\| > 120% × rated (3146), sesuai range register −1200~1200 → tulis 3050 (0,1%; +ekspor/−charge) → baca balik | ack berisi persen yang benar-benar tertulis; `error: out_of_range` |
+| `{"cmd":"set_power","args":{"power_w":5000}}` | validasi: tolak bila \|power_w\| > 120% × rated (3146), sesuai range register −1200~1200 → tulis 3050 (0,1%; +ekspor/−charge) → baca balik | ack berisi persen yang benar-benar tertulis; `error: bad_value` |
 
 **Keputusan eksplisit**: tanpa `dcon_code` — konsep itu milik firmware DCON; BESS asli
 tidak memilikinya dan simulator harus persis device asli. Pengaman pengganti: `enable`

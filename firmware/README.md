@@ -134,7 +134,7 @@ yang baru.
 `alarms_decoded` berisi **semua** bit bernama dari register `2050–2056` (lihat
 `bess_sim/alarms.py` — nama identik persis antara Python simulator dan C++
 firmware), `status_decoded` berisi semua bit bernama dari `2057`. Ukuran payload
-±2–3 KB (vs ±14 KB blok `dcon`+`bms` di sistem lama).
+~3–4 KB (terukur ~3,3 KB) (vs ±14 KB blok `dcon`+`bms` di sistem lama).
 
 **`comm_lost`**: begitu true, `active_power_kw`/`soc_percent`/dll **mempertahankan
 nilai terakhir yang diketahui** (bukan dipaksa nol) — flag `comm_lost` itu sendiri
