@@ -2875,20 +2875,22 @@ if __name__ == "__main__":
 - Create: `README.md` (root repo gateway-bess), `bess-sim/README.md`, `firmware/README.md`
 - Modify: `docs/superpowers/plans/2026-08-09-gateway-bess.md` (centang)
 
-- [ ] **Step 1: Jalankan seluruh verifikasi otomatis**
+- [x] **Step 1: Jalankan seluruh verifikasi otomatis**
 
 ```bash
 cd bess-sim && uv run pytest -v && uv run bess-sim selftest
 cd ../firmware && pio test -e native && pio run -e esp32c6
 ```
 
-Semua harus hijau/SUCCESS.
+Semua harus hijau/SUCCESS. **Hasil: 57/57 pytest PASSED, selftest LULUS, 19/19 native
+test PASSED, `pio run -e esp32c6` SUCCESS** (Flash 84,3%, RAM 16,1%) — lihat
+`task-16-report.md` untuk output verbatim.
 
-- [ ] **Step 2: Ulangi checklist e2e Task 15 Step 4** dari kondisi dingin (reboot gateway, restart simulator) — pastikan boot tanpa WiFi/BESS tidak menggantung (gateway tetap boot, `comm_lost` jujur, reconnect jalan).
+- [x] **Step 2: Ulangi checklist e2e Task 15 Step 4** dari kondisi dingin (reboot gateway, restart simulator) — pastikan boot tanpa WiFi/BESS tidak menggantung (gateway tetap boot, `comm_lost` jujur, reconnect jalan). **Dilakukan di bench nyata (COM3/COM10)** dengan deviasi yang diizinkan (reset gateway via toggle RTS/DTR, bukan cabut USB fisik): cold boot dengan simulator mati → gateway tetap boot, WiFi & MQTT connect, `[bess] COMM_LOST` jujur (bukan macet) → simulator dinyalakan → `[bess] OK` pulih → simulator dimatikan lagi → `COMM_LOST` kembali jujur → simulator direstart → `[bess] OK` pulih lagi. Bukti log verbatim di `task-16-report.md`.
 
-- [ ] **Step 3: Tulis README** — `README.md` root: peta repo (bess-sim, firmware, docs), diagram bench, cara menjalankan (3 perintah: simulator, flash, probe), tautan spec & plan, catatan "BESS asli menggantikan simulator tanpa perubahan firmware". `bess-sim/README.md`: instal uv, perintah run/selftest, format skenario, tabel register yang disimulasikan + keputusan fidelity (SOC di 3184, busy saat transisi, strict-timing). `firmware/README.md`: prasyarat PlatformIO, salin secrets, build/upload/monitor, arsitektur task, kontrak MQTT (contoh payload + 3 perintah + tabel detail ack).
+- [x] **Step 3: Tulis README** — `README.md` root: peta repo (bess-sim, firmware, docs), diagram bench, cara menjalankan (3 perintah: simulator, flash, probe), tautan spec & plan, catatan "BESS asli menggantikan simulator tanpa perubahan firmware". `bess-sim/README.md`: instal uv, perintah run/selftest, format skenario, tabel register yang disimulasikan + keputusan fidelity (SOC di 3184, busy saat transisi, strict-timing). `firmware/README.md`: prasyarat PlatformIO, salin secrets, build/upload/monitor, arsitektur task, kontrak MQTT (contoh payload + 3 perintah + tabel detail ack).
 
-- [ ] **Step 4: Commit terakhir**
+- [x] **Step 4: Commit terakhir**
 
 ```bash
 git add -A && git commit -m "docs: README repo + sim + firmware; checklist e2e lengkap"
