@@ -2,6 +2,12 @@
 #include <string.h>
 #include "mb_frame.h"
 
+void setUp(void) {
+}
+
+void tearDown(void) {
+}
+
 static void test_build_read_contoh_pdf() {
     uint8_t buf[8];
     size_t n = mbBuildRead(1, 1050, 3, buf);
