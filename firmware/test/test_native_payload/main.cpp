@@ -85,6 +85,32 @@ static void test_ack() {
     TEST_ASSERT_FLOAT_WITHIN(0.1, 5000, doc["applied"]["power_w"]);
 }
 
+static void test_telemetry_buffer_too_small() {
+    SysInfo s = sys_();
+    BessData d{};
+    d.active_power_kw = 5.0f; d.soc_pct = 47.5f; d.rated_kw = 50.0f;
+    d.status_raw = (1u << 6) | (1u << 15);
+    d.alarm_raw[2] = 0b10;
+    static char small[256];  // payload terukur ~3319 byte, buffer ini pasti kurang
+    size_t n = buildTelemetryJson(s, d, small, sizeof(small));
+    TEST_ASSERT_EQUAL(0, n);  // harus return 0, bukan cap
+}
+
+static void test_parse_command_truncation() {
+    Command c;
+    // id lebih panjang dari 39 char (sizeof c.id = 40, jadi max 39 + NUL)
+    const char* j_long_id = "{\"id\":\"aaaaaaaaaa_bbbbbbbbbb_cccccccccc_dddddddd\",\"cmd\":\"enable\",\"args\":{}}";
+    parseCommand(j_long_id, strlen(j_long_id), c);
+    TEST_ASSERT_EQUAL(Command::ENABLE, c.type);
+    TEST_ASSERT_EQUAL(39, (int)strlen(c.id));  // ter-truncate di 39 char
+
+    // cmd lebih panjang dari 23 char (sizeof c.name = 24, jadi max 23 + NUL)
+    const char* j_long_cmd = "{\"id\":\"x\",\"cmd\":\"very_long_command_name_xyzz\",\"args\":{}}";
+    parseCommand(j_long_cmd, strlen(j_long_cmd), c);
+    TEST_ASSERT_EQUAL(Command::UNSUPPORTED, c.type);  // unknown command → UNSUPPORTED
+    TEST_ASSERT_EQUAL(23, (int)strlen(c.name));  // ter-truncate di 23 char
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_telemetry_envelope);
@@ -92,5 +118,7 @@ int main() {
     RUN_TEST(test_parse_set_power);
     RUN_TEST(test_parse_unsupported_dan_bad_json);
     RUN_TEST(test_ack);
+    RUN_TEST(test_telemetry_buffer_too_small);
+    RUN_TEST(test_parse_command_truncation);
     return UNITY_END();
 }

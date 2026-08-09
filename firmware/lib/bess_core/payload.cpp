@@ -58,5 +58,7 @@ size_t buildTelemetryJson(const SysInfo& s, const BessData& d, char* out, size_t
         const char* nm = bessStatusName(bit);
         if (nm) stt[nm] = (d.status_raw >> bit) & 1;
     }
+    size_t need = measureJson(doc);
+    if (need + 1 > cap) return 0;  // buffer kurang (perlu ruang untuk NUL terminator)
     return serializeJson(doc, out, cap);
 }
