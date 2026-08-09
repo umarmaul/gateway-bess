@@ -163,12 +163,22 @@ class RegisterMap:
         self.values[id_] = _to_u16(value)
 
     def write_block(self, start: int, values: list[int]) -> None:
-        for k, i in enumerate(range(start, start + len(values))):
+        # Phase 1: Validate all addresses and writable flags (error code 2)
+        for i in range(start, start + len(values)):
             d = REGS.get(i)
             if d is None or not d.writable:
                 raise ModbusError(2)
+
+        # Phase 2: Validate all ranges (error code 3)
         for k, i in enumerate(range(start, start + len(values))):
-            self.write_single(i, values[k])
+            d = REGS[i]  # Already checked to exist in phase 1
+            v = _from_u16(_to_u16(values[k]), d.signed)
+            if not d.lo <= v <= d.hi:
+                raise ModbusError(3)
+
+        # Phase 3: Write all values (only reached if all validations pass)
+        for k, i in enumerate(range(start, start + len(values))):
+            self.values[i] = _to_u16(values[k])
 
     def get(self, id_: int) -> int:
         return self.values[id_]

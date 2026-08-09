@@ -55,3 +55,51 @@ def test_set_raw_boleh_tulis_readonly():
     r = RegisterMap()
     r.set_signed(1060, -50)
     assert r.get_signed(1060) == -50
+
+def test_write_block_happy_path():
+    """Happy path: tulis 2 register berurutan dalam range."""
+    r = RegisterMap()
+    r.write_block(3050, [100, 200])
+    assert r.get(3050) == 100
+    assert r.get(3051) == 200
+
+def test_write_block_atomik_rollback_range_error():
+    """Blok berisi nilai out-of-range → ModbusError(3), register pertama TIDAK berubah."""
+    r = RegisterMap()
+    initial_3050 = r.get(3050)
+    initial_3051 = r.get(3051)
+
+    # Coba tulis [100, 9999] ke 3050..3051; 3051 out of range (-1200..1200)
+    with pytest.raises(ModbusError) as e:
+        r.write_block(3050, [100, 9999])
+    assert e.value.code == 3
+
+    # Verifikasi tidak ada yang berubah (atomik)
+    assert r.get(3050) == initial_3050
+    assert r.get(3051) == initial_3051
+
+def test_write_block_atomik_rollback_readonly_error():
+    """Blok menyentuh register read-only → ModbusError(2), tidak ada yang berubah."""
+    r = RegisterMap()
+    initial_1050 = r.get(1050)
+
+    # Coba tulis ke 1050 (read-only telemetri)
+    with pytest.raises(ModbusError) as e:
+        r.write_block(1050, [100])
+    assert e.value.code == 2
+
+    # Verifikasi tidak ada yang berubah
+    assert r.get(1050) == initial_1050
+
+def test_write_block_atomik_rollback_undefined_error():
+    """Blok menyentuh register undefined → ModbusError(2), tidak ada yang berubah."""
+    r = RegisterMap()
+    initial_3050 = r.get(3050)
+
+    # Coba tulis ke 1109 (undefined, right after telemetri)
+    with pytest.raises(ModbusError) as e:
+        r.write_block(1109, [100])
+    assert e.value.code == 2
+
+    # Verifikasi 3050 tidak berubah
+    assert r.get(3050) == initial_3050
