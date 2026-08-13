@@ -52,6 +52,7 @@ pio test -e native
 Log boot yang sehat:
 
 ```
+[boot] reset=POWERON boot_count=12 heap=371764 min_heap=366776
 [boot] gateway-bess bess-0.1.0
 [boot] gw=58E6C5218C78
 [wifi] OK rssi=-54 ip=192.168.18.52
@@ -72,8 +73,8 @@ menyala, `[bess]` akan langsung berkata `COMM_LOST` (bukan macet) — lihat
 |---|---|---|
 | `loop()` (Arduino) | 1 | Tick WiFi reconnect, LED status, kirim telemetri MQTT tiap `TELEMETRY_PERIOD_MS` (60 dtk) |
 | `task_bess` (`task_bess.cpp`) | 3 | Poll Modbus BESS tiap `POLL_PERIOD_MS` (1,5 dtk): telemetri `1050..1108` → alarm `2050..2057` → setpoint `3050` → param `3146..3184`; decode ke `BessData`; tandai `comm_lost` setelah `COMM_LOST_AFTER`=3 siklus gagal beruntun |
-| `task_cmd` (`task_cmd.cpp`) | 2 | Antrian command dari MQTT (`taskCmdSubmit`); eksekusi `enable`/`disable`/`set_power` via Modbus, tunggu bukti nyata (bit status atau readback), kirim ack |
-| `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Connect + LWT `device/<gw>/status`, subscribe `device/<gw>/command`, publish telemetri (`enqueue`, non-blocking) & ack (`publish`, QoS1) |
+| `task_cmd` (`task_cmd.cpp`) | 2 | Antrian command dari MQTT (`taskCmdSubmit`); eksekusi `enable`/`disable`/`set_output` (alias `set_power`) via Modbus, tunggu bukti nyata (bit status atau readback), kirim ack |
+| `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Connect + LWT `device/<gw>/status`, subscribe `device/<gw>/command`, publish telemetri & ack lewat `enqueue` (non-blocking, QoS1) |
 | `wifi_mgr` | — (dipanggil dari `loop()`) | Station WiFi, `country code "ID"`, reconnect exponential backoff (tidak blocking boot) |
 | `state.h` (`g_state`) | — | `BessData` + `seq` tunggal, dilindungi mutex (`stateLock`/`stateUnlock`) — dibaca `task_bess` (tulis) dan `loop()`/`task_cmd` (baca) |
 
@@ -180,17 +181,17 @@ Alasan tolak (`detail`):
 | `detail` | Kapan |
 |---|---|
 | `bad_json` | Payload command bukan JSON valid |
-| `unsupported_cmd` | `cmd` bukan `enable`/`disable`/`set_power` |
-| `bad_value` | `set_power` tanpa `power_w`, atau `args.target` selain `1` |
+| `unsupported_cmd` | `cmd` bukan `enable`/`disable`/`set_output`/`set_power` |
+| `bad_value` | `set_output`/`set_power` tanpa `power_w`, atau `args.target` selain `1` |
 | `comm_lost` | Modbus ke BESS sedang putus (≥3 poll gagal beruntun) — command tidak dicoba sama sekali |
 | `bess_fault` | `enable` ditolak karena BESS sedang dalam kondisi fault |
 | `bess_no_ack` | Tulisan Modbus gagal (timeout/exception non-busy) setelah retry, atau bukti transisi (bit status) tidak muncul dalam 10 dtk |
-| `bess_busy` | `set_power` ditolak dengan exception Modbus 06 (device sedang di tengah transisi state) |
-| `readback_mismatch` | `set_power` tertulis tapi nilai baca-balik dari register tidak cocok dengan yang ditulis |
+| `bess_busy` | `set_output`/`set_power` ditolak dengan exception Modbus 06 (device sedang di tengah transisi state) |
+| `readback_mismatch` | `set_output`/`set_power` tertulis tapi nilai baca-balik dari register tidak cocok dengan yang ditulis |
 | `queue_full` | antrean perintah penuh; perintah tidak dijalankan, silakan kirim ulang |
 
-`applied` kosong (`{}`) untuk `enable`/`disable`; untuk `set_power` sukses berisi
-`power_pct` (persen rated yang benar-benar tertulis) dan `power_w` (setara watt).
+`applied` kosong (`{}`) untuk `enable`/`disable`; untuk `set_output`/`set_power` sukses
+berisi `power_pct` (persen rated yang benar-benar tertulis) dan `power_w` (setara watt).
 
 ## `comm_lost`
 
