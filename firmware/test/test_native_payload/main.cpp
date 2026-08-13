@@ -202,6 +202,33 @@ static void test_telemetry_buffer_too_small() {
     TEST_ASSERT_EQUAL(0, n);  // harus return 0, bukan cap
 }
 
+static void test_plan_power_dalam_rentang() {
+    float pct = 0; bool clamped = true;
+    TEST_ASSERT_TRUE(planPowerPct(5000.0f, 50000.0f, pct, clamped));
+    TEST_ASSERT_FLOAT_WITHIN(0.01, 10.0, pct);
+    TEST_ASSERT_FALSE(clamped);
+}
+
+static void test_plan_power_dipangkas_atas() {
+    float pct = 0; bool clamped = false;
+    TEST_ASSERT_TRUE(planPowerPct(70000.0f, 50000.0f, pct, clamped));
+    TEST_ASSERT_FLOAT_WITHIN(0.01, 120.0, pct);
+    TEST_ASSERT_TRUE(clamped);
+}
+
+static void test_plan_power_dipangkas_bawah() {
+    float pct = 0; bool clamped = false;
+    TEST_ASSERT_TRUE(planPowerPct(-70000.0f, 50000.0f, pct, clamped));
+    TEST_ASSERT_FLOAT_WITHIN(0.01, -120.0, pct);
+    TEST_ASSERT_TRUE(clamped);
+}
+
+static void test_plan_power_rated_belum_diketahui() {
+    float pct = 0; bool clamped = false;
+    // rated 0 = comm_lost sejak boot; tidak ada acuan untuk memangkas
+    TEST_ASSERT_FALSE(planPowerPct(5000.0f, 0.0f, pct, clamped));
+}
+
 static void test_parse_command_truncation() {
     Command c;
     // id lebih panjang dari 39 char (sizeof c.id = 40, jadi max 39 + NUL)
@@ -231,6 +258,10 @@ int main() {
     RUN_TEST(test_parse_set_output_nama_resmi);
     RUN_TEST(test_parse_target_default_satu);
     RUN_TEST(test_parse_target_eksplisit);
+    RUN_TEST(test_plan_power_dalam_rentang);
+    RUN_TEST(test_plan_power_dipangkas_atas);
+    RUN_TEST(test_plan_power_dipangkas_bawah);
+    RUN_TEST(test_plan_power_rated_belum_diketahui);
     RUN_TEST(test_parse_unsupported_dan_bad_json);
     RUN_TEST(test_ack);
     RUN_TEST(test_telemetry_buffer_too_small);

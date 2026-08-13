@@ -25,4 +25,12 @@ size_t buildAckJson(const Command& c, const char* result, const char* detail,
                     float applied_pct, float applied_w, uint32_t ts,
                     char* out, size_t cap);
 
+// Batas device: register 3050 berjangkauan -1200..1200 dalam satuan 0,1% rated.
+#define POWER_PCT_LIMIT 120.0f
+
+// Menghitung setpoint persen dari watt dan memangkasnya ke +-POWER_PCT_LIMIT.
+// Mengembalikan false kalau rated_w tidak valid (<= 0) — tidak ada acuan untuk
+// memangkas, jadi pemanggil harus menolak perintahnya.
+bool planPowerPct(float power_w, float rated_w, float& pct, bool& clamped);
+
 #endif

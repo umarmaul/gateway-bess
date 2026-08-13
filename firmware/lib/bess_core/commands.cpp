@@ -46,3 +46,13 @@ size_t buildAckJson(const Command& c, const char* result, const char* detail,
     doc["ts"] = tsOrZero(ts);
     return serializeJson(doc, out, cap);
 }
+
+bool planPowerPct(float power_w, float rated_w, float& pct, bool& clamped) {
+    if (!(rated_w > 0.0f)) return false;     // juga menangkap NAN
+    float raw = power_w / rated_w * 100.0f;
+    clamped = false;
+    if (raw > POWER_PCT_LIMIT) { raw = POWER_PCT_LIMIT; clamped = true; }
+    if (raw < -POWER_PCT_LIMIT) { raw = -POWER_PCT_LIMIT; clamped = true; }
+    pct = raw;
+    return true;
+}

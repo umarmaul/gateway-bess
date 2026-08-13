@@ -68,9 +68,12 @@ static void doSetPower(const Command& c) {
     float rated_w = g_state.bess.rated_kw * 1000.0f;
     stateUnlock();
     if (lost) { sendAck(c, "rejected", "comm_lost"); return; }
-    if (rated_w <= 0) { sendAck(c, "rejected", "bess_no_ack"); return; }
-    float pct = c.power_w / rated_w * 100.0f;
-    if (fabsf(pct) > 120.0f) { sendAck(c, "rejected", "bad_value"); return; }
+    float pct = 0.0f;
+    bool clamped = false;
+    if (!planPowerPct(c.power_w, rated_w, pct, clamped)) {
+        sendAck(c, "rejected", "bess_no_ack");   // rated belum diketahui
+        return;
+    }
     int16_t raw = (int16_t)lroundf(pct * 10.0f);
     uint8_t exc = 0;
     if (mbWrite6(BESS_NODE, REG_P_SET, (uint16_t)raw, &exc) != MB_OK) {
@@ -83,7 +86,9 @@ static void doSetPower(const Command& c) {
         sendAck(c, "rejected", "readback_mismatch");
         return;
     }
-    sendAck(c, "accepted", "", raw / 10.0f, raw / 1000.0f * rated_w / 10.0f * 10.0f);
+    float applied_pct = raw / 10.0f;
+    sendAck(c, clamped ? "clamped" : "accepted", "",
+            applied_pct, applied_pct / 100.0f * rated_w);
 }
 
 static void run(void*) {
