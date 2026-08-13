@@ -40,15 +40,17 @@ void loop() {
                       WiFi.localIP().toString().c_str());
     }
     static uint32_t last_telem = 0;
-    if (millis() - last_telem > TELEMETRY_PERIOD_MS && wifiConnected()) {
+    // mqttConnected() ikut digerbang: kalau broker putus, jangan menumpuk
+    // telemetri di outbox lalu memuntahkannya beruntun saat reconnect.
+    if (millis() - last_telem > TELEMETRY_PERIOD_MS && wifiConnected() &&
+        mqttConnected()) {
         last_telem = millis();
         static char json[8192];
         SysInfo si{};
         wifiGw(si.gw);
         si.fw_version = FW_VERSION;
         si.uptime_ms = millis();
-        si.ts = (uint32_t)time(nullptr);
-        si.time_valid = si.ts > 1600000000u;
+        si.ts = (uint32_t)time(nullptr);   // buildTelemetryJson yang menolkan
         si.rssi = WiFi.RSSI();
         si.ssid = WIFI_SSID;
         snprintf(si.ip, sizeof(si.ip), "%s", WiFi.localIP().toString().c_str());

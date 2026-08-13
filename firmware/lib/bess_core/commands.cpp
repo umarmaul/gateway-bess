@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <math.h>
 #include <string.h>
+#include "timeutil.h"
 
 static void scopy(char* dst, size_t cap, const char* src) {
     if (!src) { dst[0] = 0; return; }
@@ -39,6 +40,6 @@ size_t buildAckJson(const Command& c, const char* result, const char* detail,
     JsonObject ap = doc["applied"].to<JsonObject>();
     if (!isnan(applied_pct)) ap["power_pct"] = applied_pct;
     if (!isnan(applied_w)) ap["power_w"] = applied_w;
-    doc["ts"] = ts;
+    doc["ts"] = tsOrZero(ts);
     return serializeJson(doc, out, cap);
 }

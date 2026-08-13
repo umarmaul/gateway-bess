@@ -112,7 +112,7 @@ yang baru.
     "device_id": "58E6C5218C78",
     "uptime_ms": 723004,
     "time_valid": true,
-    "network": {"ssid": "...", "ip": "192.168.18.52", "rssi": -54},
+    "network": {"ssid": "...", "ip": "192.168.18.52", "rssi_dbm": -54},
     "bess": {
       "grid_voltage_ab_v": 398.2, "grid_voltage_bc_v": 397.9, "grid_voltage_ca_v": 398.5,
       "grid_current_a_a": 7.2, "grid_current_b_a": 7.1, "grid_current_c_a": 7.3,
@@ -135,6 +135,10 @@ yang baru.
 `bess_sim/alarms.py` — nama identik persis antara Python simulator dan C++
 firmware), `status_decoded` berisi semua bit bernama dari `2057`. Ukuran payload
 ~3–4 KB (terukur ~3,3 KB) (vs ±14 KB blok `dcon`+`bms` di sistem lama).
+
+**`ts`**: detik epoch UTC, atau **`0` kalau jam gateway belum sinkron NTP** — jangan
+dibaca sebagai tahun 1970. Berlaku untuk `ts` di envelope maupun di ack, dan
+`data.time_valid` adalah cerminan langsung dari `ts != 0`.
 
 **`comm_lost`**: begitu true, `active_power_kw`/`soc_percent`/dll **mempertahankan
 nilai terakhir yang diketahui** (bukan dipaksa nol) — flag `comm_lost` itu sendiri

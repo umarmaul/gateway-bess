@@ -11,6 +11,7 @@ void wifiInit() {
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     esp_wifi_set_country_code("ID", true);      // kanal 1-13 (pelajaran reason=203)
+    WiFi.setSleep(false);                       // modem sleep OFF (latensi + EMI)
     WiFi.setAutoReconnect(false);               // wifiTick satu-satunya driver
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 }

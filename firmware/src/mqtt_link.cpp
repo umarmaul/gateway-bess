@@ -38,6 +38,10 @@ void mqttInit(const char* gw) {
     snprintf(t_ack, sizeof(t_ack), "device/%s/command/ack", gw);
     esp_mqtt_client_config_t cfg = {};
     cfg.broker.address.uri = MQTT_URI;
+    // client_id = MAC, sama dengan BEPESP32_WiFi_Extension. Tanpa ini esp-mqtt
+    // memakai default "ESP32_xxxxxx" → ACL broker bergaya device/${clientid}/#
+    // akan menolak publish ke topic kita sendiri.
+    cfg.credentials.client_id = gw;
     cfg.credentials.username = MQTT_USER;
     cfg.credentials.authentication.password = MQTT_PASSWD;
     cfg.session.keepalive = MQTT_KEEPALIVE_S;

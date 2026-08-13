@@ -16,7 +16,7 @@ static SysInfo sys_() {
     SysInfo s{};
     strcpy(s.gw, "AABBCCDDEEFF");
     s.fw_version = "bess-0.1.0";
-    s.uptime_ms = 123456; s.seq = 7; s.ts = 1785000000; s.time_valid = true;
+    s.uptime_ms = 123456; s.seq = 7; s.ts = 1785000000;
     s.rssi = -55; s.ssid = "Lantai 2"; strcpy(s.ip, "192.168.1.50");
     return s;
 }
@@ -42,6 +42,60 @@ static void test_telemetry_envelope() {
     TEST_ASSERT_TRUE(doc["data"]["bess"]["alarms_decoded"]["grid_undervoltage"].as<bool>());
     TEST_ASSERT_FALSE(doc["data"]["bess"]["alarms_decoded"]["dc_bus_overvoltage"].as<bool>());
     TEST_ASSERT_TRUE(doc["data"]["bess"]["status_decoded"]["running"].as<bool>());
+}
+
+static void test_network_rssi_dbm() {
+    // Nama field harus "rssi_dbm" — sama dengan BEPESP32_WiFi_Extension
+    // (branch gateway-mqtt, makeDataJson) supaya parser cloud tidak perlu cabang.
+    SysInfo s = sys_();
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    JsonObject net = doc["data"]["network"];
+    TEST_ASSERT_EQUAL(-55, (int)net["rssi_dbm"]);
+    TEST_ASSERT_TRUE(net["rssi"].isNull());   // nama lama tidak boleh tersisa
+}
+
+static void test_ts_nol_saat_ntp_belum_sinkron() {
+    // Sebelum NTP sinkron, time(nullptr) mengembalikan detik sejak boot (angka
+    // kecil). Kirim 0 — bukan angka kecil yang terbaca cloud sebagai tahun 1970.
+    SysInfo s = sys_();
+    s.ts = 8;
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL(0, (int)doc["ts"]);
+    TEST_ASSERT_FALSE(doc["data"]["time_valid"].as<bool>());
+}
+
+static void test_ts_diteruskan_saat_ntp_sinkron() {
+    SysInfo s = sys_();
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_UINT32(1785000000u, doc["ts"].as<uint32_t>());
+    TEST_ASSERT_TRUE(doc["data"]["time_valid"].as<bool>());
+}
+
+static void test_ack_ts_nol_saat_ntp_belum_sinkron() {
+    Command c{};
+    c.type = Command::ENABLE;
+    strcpy(c.id, "z9"); strcpy(c.name, "enable");
+    static char buf[512];
+    size_t n = buildAckJson(c, "accepted", "", NAN, NAN, 8, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    deserializeJson(doc, buf);
+    TEST_ASSERT_EQUAL(0, (int)doc["ts"]);
 }
 
 static void test_parse_enable() {
@@ -114,6 +168,10 @@ static void test_parse_command_truncation() {
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_telemetry_envelope);
+    RUN_TEST(test_network_rssi_dbm);
+    RUN_TEST(test_ts_nol_saat_ntp_belum_sinkron);
+    RUN_TEST(test_ts_diteruskan_saat_ntp_sinkron);
+    RUN_TEST(test_ack_ts_nol_saat_ntp_belum_sinkron);
     RUN_TEST(test_parse_enable);
     RUN_TEST(test_parse_set_power);
     RUN_TEST(test_parse_unsupported_dan_bad_json);
