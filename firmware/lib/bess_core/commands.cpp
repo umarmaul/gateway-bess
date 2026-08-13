@@ -19,9 +19,12 @@ void parseCommand(const char* json, size_t len, Command& out) {
     }
     scopy(out.id, sizeof(out.id), doc["id"] | "");
     scopy(out.name, sizeof(out.name), doc["cmd"] | "");
+    out.target = doc["args"]["target"] | 1u;
     if (!strcmp(out.name, "enable")) out.type = Command::ENABLE;
     else if (!strcmp(out.name, "disable")) out.type = Command::DISABLE;
-    else if (!strcmp(out.name, "set_power")) {
+    else if (!strcmp(out.name, "set_output") || !strcmp(out.name, "set_power")) {
+        // set_output = nama resmi (selaras BEPESP32_WiFi_Extension);
+        // set_power = alias lama fase 1, dipertahankan supaya cloud tidak rusak.
         out.type = Command::SET_POWER;
         JsonVariant p = doc["args"]["power_w"];
         out.has_power = !p.isNull();

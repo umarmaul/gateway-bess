@@ -92,6 +92,13 @@ static void run(void*) {
         if (xQueueReceive(q, &rc, portMAX_DELAY) != pdTRUE) continue;
         Command c;
         parseCommand(rc.json, rc.len, c);
+        // BESS adalah node tunggal. Sebelumnya target diabaikan diam-diam,
+        // sehingga perintah untuk node lain dijalankan di node ini.
+        if ((c.type == Command::ENABLE || c.type == Command::DISABLE ||
+             c.type == Command::SET_POWER) && c.target != 1) {
+            sendAck(c, "rejected", "bad_value");
+            continue;
+        }
         switch (c.type) {
             case Command::ENABLE:  doOnOff(c, true); break;
             case Command::DISABLE: doOnOff(c, false); break;

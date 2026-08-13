@@ -142,6 +142,31 @@ static void test_parse_set_power() {
     TEST_ASSERT_FLOAT_WITHIN(0.1, 5000, c.power_w);
 }
 
+static void test_parse_set_output_nama_resmi() {
+    Command c;
+    const char* j = "{\"id\":\"c3\",\"cmd\":\"set_output\",\"args\":{\"power_w\":5000}}";
+    parseCommand(j, strlen(j), c);
+    TEST_ASSERT_EQUAL(Command::SET_POWER, c.type);
+    TEST_ASSERT_TRUE(c.has_power);
+    TEST_ASSERT_FLOAT_WITHIN(0.1, 5000, c.power_w);
+    // ack harus menggemakan nama yang dikirim cloud, bukan nama internal
+    TEST_ASSERT_EQUAL_STRING("set_output", c.name);
+}
+
+static void test_parse_target_default_satu() {
+    Command c;
+    const char* j = "{\"id\":\"d4\",\"cmd\":\"enable\",\"args\":{}}";
+    parseCommand(j, strlen(j), c);
+    TEST_ASSERT_EQUAL_UINT32(1u, c.target);
+}
+
+static void test_parse_target_eksplisit() {
+    Command c;
+    const char* j = "{\"id\":\"e5\",\"cmd\":\"enable\",\"args\":{\"target\":2}}";
+    parseCommand(j, strlen(j), c);
+    TEST_ASSERT_EQUAL_UINT32(2u, c.target);
+}
+
 static void test_parse_unsupported_dan_bad_json() {
     Command c;
     const char* j = "{\"id\":\"x\",\"cmd\":\"fly\"}";
@@ -203,6 +228,9 @@ int main() {
     RUN_TEST(test_ack_ts_nol_saat_ntp_belum_sinkron);
     RUN_TEST(test_parse_enable);
     RUN_TEST(test_parse_set_power);
+    RUN_TEST(test_parse_set_output_nama_resmi);
+    RUN_TEST(test_parse_target_default_satu);
+    RUN_TEST(test_parse_target_eksplisit);
     RUN_TEST(test_parse_unsupported_dan_bad_json);
     RUN_TEST(test_ack);
     RUN_TEST(test_telemetry_buffer_too_small);
