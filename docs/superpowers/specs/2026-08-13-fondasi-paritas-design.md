@@ -87,16 +87,24 @@ coredump, data, coredump,0x3F0000,0x10000,
 
 Didaftarkan lewat `board_build.partitions = partitions.csv` di `platformio.ini`.
 
-**Flash pertama wajib `pio run -t erase` lalu upload** — offset `nvs` dan `otadata`
-berpindah, isi lama tidak lagi valid di lokasinya yang baru.
+**Flash pertama wajib `pio run -t erase` lalu upload.** ⚠️ **Koreksi (lihat catatan di
+§7):** alasan yang tertulis semula di sini — "offset `nvs` dan `otadata` berpindah" —
+**salah**. Dibandingkan langsung dengan `partitions/default.csv` bawaan toolchain
+(`framework-arduinoespressif32`), `nvs` (`0x9000,0x5000`), `otadata` (`0xe000,0x2000`),
+dan `coredump` (`0x3F0000,0x10000`) **identik offset dan ukurannya** di kedua tabel. Yang
+benar-benar berubah hanya `app0` (ukuran naik), `app1` (offset **dan** ukuran naik), dan
+`spiffs` (offset naik). Erase penuh dilakukan sebagai **kehati-hatian**, bukan karena ada
+offset `nvs`/`otadata` yang bergeser — keduanya tidak bergeser.
 
 Efek terukur yang diharapkan: **84,3% dari 1.310.720 B → ±59% dari 1.966.080 B**, dan dua
 slot OTA tersedia untuk sub-proyek G.
 
 **Terverifikasi sebagai prasyarat:** `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y` (format ELF,
 checksum CRC32) sudah aktif di `framework-arduinoespressif32-libs/esp32c6/sdkconfig`
-bawaan pioarduino. Partisi `coredump` karena itu langsung berguna tanpa mengubah
-konfigurasi inti apa pun.
+bawaan pioarduino. ⚠️ **Koreksi:** partisi `coredump` **bukan** hal baru yang "diaktifkan"
+tabel ini — partisi itu sudah ada di offset dan ukuran yang sama persis di
+`default.csv` bawaan toolchain. Tabel baru tidak menambah kemampuan coredump-ke-flash;
+kemampuan itu sudah ada sebelum spec ini. Konsekuensinya dicatat di §7.
 
 ### 3.2 A — Diagnosis reboot
 
@@ -226,3 +234,24 @@ mengerjakannya di fase fondasi, sebelum pemasangan.
 
 **Reboot bisa saja tidak tereproduksi.** Kalau begitu, fase ini selesai dengan instrumentasi
 terpasang dan satu pertanyaan terbuka yang jujur dicatat, bukan dengan klaim perbaikan.
+
+---
+
+**⚠️ KOREKSI (ditambahkan pasca-review akhir seluruh branch, setelah Task 3 dilaporkan
+selesai).** §3.1 di atas semula mengklaim erase penuh wajib karena `nvs` dan `otadata`
+berpindah offset. Klaim itu salah — dibandingkan byte-per-byte dengan `default.csv` bawaan
+toolchain, `nvs`, `otadata`, **dan** `coredump` identik di kedua tabel; hanya `app0`,
+`app1`, dan `spiffs` yang berubah. §3.1 sudah diperbaiki di tempat, ditandai jelas.
+
+Konsekuensinya nyata untuk Task 3: partisi `coredump` di `0x3F0000` **sudah ada** sebelum
+spec ini (bukan baru "lahir" bersama tabel baru), jadi kalau reboot tak dikenal 13 Agustus
+itu benar sebuah panic, coredump-nya kemungkinan **sudah tersimpan di flash** pada saat
+kejadian — lalu **dihapus oleh `pio run -t erase` di Task 1**, sebelum Task 3 sempat
+membacanya. Ledger Task 3 (`.superpowers/sdd/2026-08-13-fondasi-paritas/progress.md`)
+menjelaskan coredump kosong dengan alasan "partisinya lahir di `be760d3`, sesudah kejadian
+kemarin" — alasan itu keliru (partisi itu bukan baru); koreksi terpisah ditambahkan di
+ledger tersebut, entri asli tidak dihapus.
+
+**Kesimpulan yang tersisa jujur:** akar penyebab reboot 13 Agustus **tetap tidak
+diketahui** — bukan karena coredump-nya kosong secara alami, tapi karena buktinya
+kemungkinan pernah ada dan lalu terhapus oleh langkah kita sendiri di Task 1.

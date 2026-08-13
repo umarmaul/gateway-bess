@@ -58,7 +58,11 @@ static void doOnOff(const Command& c, bool on) {
     MbStatus st = MB_TIMEOUT;
     for (int i = 0; i < 20; i++) {                    // busy (exc 6) → coba lagi
         st = mbWrite5(BESS_NODE, REG_ONOFF, on, &exc);
-        if (st == MB_OK || (st == MB_EXCEPTION && exc != 6)) break;
+        // Hanya exception busy (06) yang layak diulang. MB_OK selesai; exception
+        // lain, timeout, CRC, dan frame cacat semuanya berarti bus tidak akan
+        // membaik dengan diulang 20x — keluar segera supaya slot antrean tidak
+        // tersandera sampai puluhan detik saat bus benar-benar mati.
+        if (st != MB_EXCEPTION || exc != 6) break;
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     if (st != MB_OK) { sendAck(c, "rejected", "bess_no_ack"); return; }

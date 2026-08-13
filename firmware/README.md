@@ -64,8 +64,8 @@ Log boot yang sehat:
 semua topic MQTT. Percobaan konek MQTT **pertama** setelah boot lazim gagal (DNS
 belum siap sebelum WiFi selesai asosiasi) — esp-mqtt retry otomatis, `[mqtt]
 connected` menyusul dalam beberapa detik; ini bukan bug. Jika BESS/simulator belum
-menyala, `[bess]` akan langsung berkata `COMM_LOST` (bukan macet) — lihat
-§"comm_lost" di bawah.
+menyala, `[bess]` akan berkata `COMM_LOST` (bukan macet) setelah **~25 dtk** — lihat
+§"comm_lost" di bawah untuk rinciannya.
 
 ## Arsitektur task (FreeRTOS)
 
@@ -200,6 +200,16 @@ Dinaikkan oleh `task_bess` setelah 3 siklus poll Modbus gagal beruntun
 — tidak perlu reboot gateway maupun restart manual apa pun. Command yang masuk
 selagi `comm_lost=true` langsung ditolak (`detail:"comm_lost"`) tanpa mencoba
 Modbus sama sekali, supaya tidak menggantung menunggu bus yang memang sedang mati.
+
+**Biaya waktu nyata: ~25 dtk saat device benar-benar tidak merespons**, bukan sesaat.
+Sejak short-circuit dihapus (paritas dengan firmware rekan kerja), setiap siklus poll
+mencoba **keempat** blok register (telemetri, alarm, setpoint, param) dengan timeout+retry
+penuh masing-masing, bukan berhenti di blok pertama yang gagal — satu siklus poll saat
+bus mati memakan **~7,2 dtk**. Tiga siklus gagal beruntun (`COMM_LOST_AFTER`=3) ditambah
+jeda antar-siklus ~1,5 dtk ⇒ **≈3×7,2 + 1,5 ≈ 24–25 dtk** dari device berhenti merespons
+sampai `comm_lost` naik. Ini naik dari ~8–9 dtk sebelumnya (short-circuit lama berhenti
+di kegagalan pertama per siklus). Tim cloud yang menyetel timeout command dari angka ini
+harus memakai **~25 dtk**, bukan `[bess]` "langsung" seperti kesan di §Prasyarat di atas.
 
 ## Non-scope fase ini
 
