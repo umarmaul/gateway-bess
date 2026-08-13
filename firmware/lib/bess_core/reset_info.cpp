@@ -5,7 +5,7 @@
 const char* resetReasonName(int reason, char* out, size_t cap) {
     static const char* NAMA[] = {
         "UNKNOWN", "POWERON", "EXT", "SW", "PANIC", "INT_WDT",
-        "TASK_WDT", "WDT", "DEEPSLEEP", "BROWNOUT", "SDIO",
+        "TASK_WDT", "WDT", "DEEPSLEEP", "BROWNOUT", "SDIO", "USB", "JTAG",
     };
     const int n = (int)(sizeof(NAMA) / sizeof(NAMA[0]));
     if (reason > 0 && reason < n) {

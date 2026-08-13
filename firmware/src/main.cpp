@@ -15,13 +15,22 @@
 #include "reset_info.h"
 
 // Kalau ESP-IDF pernah menggeser nilai enum-nya, build gagal di sini —
-// bukan diam-diam salah label di telemetri lapangan.
+// bukan diam-diam salah label di telemetri lapangan. Mencakup SEMUA
+// konstanta yang dipakai tabel NAMA[] di reset_info.cpp (0-12), bukan
+// cuma sebagian — supaya klaim di komentar ini benar-benar berlaku.
+static_assert(ESP_RST_UNKNOWN  == RESET_UNKNOWN,  "nilai enum reset bergeser");
 static_assert(ESP_RST_POWERON  == RESET_POWERON,  "nilai enum reset bergeser");
+static_assert(ESP_RST_EXT      == RESET_EXT,      "nilai enum reset bergeser");
 static_assert(ESP_RST_SW       == RESET_SW,       "nilai enum reset bergeser");
 static_assert(ESP_RST_PANIC    == RESET_PANIC,    "nilai enum reset bergeser");
 static_assert(ESP_RST_INT_WDT  == RESET_INT_WDT,  "nilai enum reset bergeser");
 static_assert(ESP_RST_TASK_WDT == RESET_TASK_WDT, "nilai enum reset bergeser");
+static_assert(ESP_RST_WDT      == RESET_WDT,      "nilai enum reset bergeser");
+static_assert(ESP_RST_DEEPSLEEP == RESET_DEEPSLEEP, "nilai enum reset bergeser");
 static_assert(ESP_RST_BROWNOUT == RESET_BROWNOUT, "nilai enum reset bergeser");
+static_assert(ESP_RST_SDIO     == RESET_SDIO,     "nilai enum reset bergeser");
+static_assert(ESP_RST_USB      == RESET_USB,      "nilai enum reset bergeser");
+static_assert(ESP_RST_JTAG     == RESET_JTAG,     "nilai enum reset bergeser");
 
 static char g_reset_reason[24] = "UNKNOWN";
 static uint32_t g_boot_count = 0;
@@ -31,11 +40,16 @@ void setup() {
     delay(200);                       // beri waktu USB-CDC siap sebelum baris pertama
     resetReasonName((int)esp_reset_reason(), g_reset_reason, sizeof(g_reset_reason));
     Preferences bootprefs;
-    if (bootprefs.begin("boot", false)) {
+    bool nvs_ok = bootprefs.begin("boot", false);
+    if (nvs_ok) {
         g_boot_count = bootprefs.getUInt("count", 0) + 1;
         bootprefs.putUInt("count", g_boot_count);
         bootprefs.end();
     }
+    // Kalau NVS gagal dibuka, boot_count diam di 0 — tanpa baris ini itu
+    // tak terbedakan dari boot pertama yang genuine. Fitur ini ada justru
+    // supaya masalah boot terlihat; jalur kegagalannya sendiri tak boleh diam.
+    if (!nvs_ok) Serial.println("[boot] WARNING nvs_open_gagal boot_count=0 (bukan boot pertama, NVS 'boot' tak terbuka)");
     Serial.printf("[boot] reset=%s boot_count=%u heap=%u min_heap=%u\n",
                   g_reset_reason, g_boot_count,
                   (unsigned)esp_get_free_heap_size(),

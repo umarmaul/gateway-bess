@@ -105,6 +105,8 @@ static void test_reset_reason_name() {
     TEST_ASSERT_EQUAL_STRING("PANIC", resetReasonName(RESET_PANIC, buf, sizeof(buf)));
     TEST_ASSERT_EQUAL_STRING("BROWNOUT", resetReasonName(RESET_BROWNOUT, buf, sizeof(buf)));
     TEST_ASSERT_EQUAL_STRING("TASK_WDT", resetReasonName(RESET_TASK_WDT, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("USB", resetReasonName(RESET_USB, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("JTAG", resetReasonName(RESET_JTAG, buf, sizeof(buf)));
     // Nilai tak dikenal tidak boleh hilang diam-diam
     TEST_ASSERT_EQUAL_STRING("UNKNOWN_99", resetReasonName(99, buf, sizeof(buf)));
 }

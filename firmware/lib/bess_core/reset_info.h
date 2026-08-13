@@ -16,6 +16,8 @@
 #define RESET_DEEPSLEEP  8
 #define RESET_BROWNOUT   9
 #define RESET_SDIO       10
+#define RESET_USB        11
+#define RESET_JTAG       12
 
 // Menulis nama alasan reset ke out (selalu NUL-terminated), mengembalikan out.
 // Nilai tak dikenal menjadi "UNKNOWN_<angka>" supaya tidak ada informasi hilang.
