@@ -6,6 +6,7 @@
 #include "payload.h"
 #include "commands.h"
 #include "reset_info.h"
+#include "timeutil.h"
 
 void setUp(void) {
 }
@@ -258,6 +259,19 @@ static void test_parse_command_truncation() {
     TEST_ASSERT_EQUAL(23, (int)strlen(c.name));  // ter-truncate di 23 char
 }
 
+static void test_time_after_biasa() {
+    TEST_ASSERT_TRUE(timeAfter(1000u, 500u));
+    TEST_ASSERT_TRUE(timeAfter(500u, 500u));     // tepat di batas = sudah waktunya
+    TEST_ASSERT_FALSE(timeAfter(499u, 500u));
+}
+
+static void test_time_after_rollover() {
+    // millis() berputar di hari ke-49. deadline dekat 0xFFFFFFFF, now sudah
+    // berputar ke angka kecil: perbandingan biasa (now >= deadline) salah.
+    TEST_ASSERT_TRUE(timeAfter(10u, 0xFFFFFF00u));
+    TEST_ASSERT_FALSE(timeAfter(0xFFFFFF00u, 10u));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_telemetry_envelope);
@@ -282,5 +296,7 @@ int main() {
     RUN_TEST(test_ack);
     RUN_TEST(test_telemetry_buffer_too_small);
     RUN_TEST(test_parse_command_truncation);
+    RUN_TEST(test_time_after_biasa);
+    RUN_TEST(test_time_after_rollover);
     return UNITY_END();
 }

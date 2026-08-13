@@ -11,4 +11,8 @@
 // 0 = "waktu tidak diketahui" (kontrak sama dengan BEPESP32_WiFi_Extension).
 uint32_t tsOrZero(uint32_t epoch);
 
+// Benar kalau now sudah mencapai/melewati deadline. Memakai selisih bertanda
+// supaya tetap benar saat millis() berputar (hari ke-49).
+bool timeAfter(uint32_t now, uint32_t deadline);
+
 #endif

@@ -3,6 +3,7 @@
 #include <esp_wifi.h>
 #include "config.h"
 #include "secrets.h"
+#include "timeutil.h"
 
 static uint32_t next_try_ms = 0;
 static uint32_t backoff_ms = 4000;
@@ -19,7 +20,7 @@ void wifiInit() {
 void wifiTick() {
     if (WiFi.status() == WL_CONNECTED) { backoff_ms = 4000; return; }
     uint32_t now = millis();
-    if (now >= next_try_ms) {
+    if (timeAfter(now, next_try_ms)) {
         WiFi.disconnect();
         WiFi.begin(WIFI_SSID, WIFI_PASS);
         next_try_ms = now + backoff_ms;
