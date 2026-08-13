@@ -12,6 +12,8 @@ struct SysInfo {
     int rssi;
     const char* ssid;
     char ip[16];
+    const char* last_reset_reason;   // hasil resetReasonName(), mis. "PANIC"
+    uint32_t boot_count;             // pencacah monotonik di NVS
 };
 
 // Builds telemetry JSON per spec §6.1

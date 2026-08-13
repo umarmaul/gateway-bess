@@ -10,9 +10,36 @@
 #include "mqtt_link.h"
 #include "task_cmd.h"
 #include "secrets.h"        // WIFI_SSID (dipakai di blok telemetri)
+#include <Preferences.h>
+#include <esp_system.h>
+#include "reset_info.h"
+
+// Kalau ESP-IDF pernah menggeser nilai enum-nya, build gagal di sini —
+// bukan diam-diam salah label di telemetri lapangan.
+static_assert(ESP_RST_POWERON  == RESET_POWERON,  "nilai enum reset bergeser");
+static_assert(ESP_RST_SW       == RESET_SW,       "nilai enum reset bergeser");
+static_assert(ESP_RST_PANIC    == RESET_PANIC,    "nilai enum reset bergeser");
+static_assert(ESP_RST_INT_WDT  == RESET_INT_WDT,  "nilai enum reset bergeser");
+static_assert(ESP_RST_TASK_WDT == RESET_TASK_WDT, "nilai enum reset bergeser");
+static_assert(ESP_RST_BROWNOUT == RESET_BROWNOUT, "nilai enum reset bergeser");
+
+static char g_reset_reason[24] = "UNKNOWN";
+static uint32_t g_boot_count = 0;
 
 void setup() {
     Serial.begin(115200);           // USB-CDC (COM3)
+    delay(200);                       // beri waktu USB-CDC siap sebelum baris pertama
+    resetReasonName((int)esp_reset_reason(), g_reset_reason, sizeof(g_reset_reason));
+    Preferences bootprefs;
+    if (bootprefs.begin("boot", false)) {
+        g_boot_count = bootprefs.getUInt("count", 0) + 1;
+        bootprefs.putUInt("count", g_boot_count);
+        bootprefs.end();
+    }
+    Serial.printf("[boot] reset=%s boot_count=%u heap=%u min_heap=%u\n",
+                  g_reset_reason, g_boot_count,
+                  (unsigned)esp_get_free_heap_size(),
+                  (unsigned)esp_get_minimum_free_heap_size());
     pinMode(PIN_LED_WIFI, OUTPUT);
     pinMode(PIN_LED_BESS, OUTPUT);
     stateInit();
@@ -49,6 +76,8 @@ void loop() {
         SysInfo si{};
         wifiGw(si.gw);
         si.fw_version = FW_VERSION;
+        si.last_reset_reason = g_reset_reason;
+        si.boot_count = g_boot_count;
         si.uptime_ms = millis();
         si.ts = (uint32_t)time(nullptr);   // buildTelemetryJson yang menolkan
         si.rssi = WiFi.RSSI();

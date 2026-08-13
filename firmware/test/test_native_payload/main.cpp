@@ -5,6 +5,7 @@
 #include "bess_data.h"
 #include "payload.h"
 #include "commands.h"
+#include "reset_info.h"
 
 void setUp(void) {
 }
@@ -98,6 +99,30 @@ static void test_ack_ts_nol_saat_ntp_belum_sinkron() {
     TEST_ASSERT_EQUAL(0, (int)doc["ts"]);
 }
 
+static void test_reset_reason_name() {
+    char buf[24];
+    TEST_ASSERT_EQUAL_STRING("POWERON", resetReasonName(RESET_POWERON, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("PANIC", resetReasonName(RESET_PANIC, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("BROWNOUT", resetReasonName(RESET_BROWNOUT, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("TASK_WDT", resetReasonName(RESET_TASK_WDT, buf, sizeof(buf)));
+    // Nilai tak dikenal tidak boleh hilang diam-diam
+    TEST_ASSERT_EQUAL_STRING("UNKNOWN_99", resetReasonName(99, buf, sizeof(buf)));
+}
+
+static void test_telemetry_diagnostik_boot() {
+    SysInfo s = sys_();
+    s.last_reset_reason = "PANIC";
+    s.boot_count = 42;
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_STRING("PANIC", doc["data"]["last_reset_reason"]);
+    TEST_ASSERT_EQUAL(42, (int)doc["data"]["boot_count"]);
+}
+
 static void test_parse_enable() {
     Command c;
     const char* j = "{\"id\":\"a1\",\"cmd\":\"enable\",\"args\":{}}";
@@ -168,6 +193,8 @@ static void test_parse_command_truncation() {
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_telemetry_envelope);
+    RUN_TEST(test_reset_reason_name);
+    RUN_TEST(test_telemetry_diagnostik_boot);
     RUN_TEST(test_network_rssi_dbm);
     RUN_TEST(test_ts_nol_saat_ntp_belum_sinkron);
     RUN_TEST(test_ts_diteruskan_saat_ntp_sinkron);

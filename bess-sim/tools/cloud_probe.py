@@ -30,9 +30,11 @@ def main():
             doc = json.loads(m.payload)
             if "data" in doc:
                 b = doc["data"].get("bess", {})
-                print(f"seq={doc['seq']} type={doc['data'].get('device_type')} "
+                d = doc["data"]
+                print(f"seq={doc['seq']} type={d.get('device_type')} "
                       f"p={b.get('active_power_kw')}kW soc={b.get('soc_percent')}% "
-                      f"running={b.get('running')} comm_lost={b.get('comm_lost')}")
+                      f"running={b.get('running')} comm_lost={b.get('comm_lost')} "
+                      f"reset={d.get('last_reset_reason')} boot={d.get('boot_count')}")
             else:
                 print(json.dumps(doc, indent=1))
         except json.JSONDecodeError:
