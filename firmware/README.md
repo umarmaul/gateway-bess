@@ -52,6 +52,7 @@ pio test -e native
 Log boot yang sehat:
 
 ```
+[boot] reset=POWERON boot_count=12 heap=371764 min_heap=366776
 [boot] gateway-bess bess-0.1.0
 [boot] gw=58E6C5218C78
 [wifi] OK rssi=-54 ip=192.168.18.52
@@ -63,8 +64,8 @@ Log boot yang sehat:
 semua topic MQTT. Percobaan konek MQTT **pertama** setelah boot lazim gagal (DNS
 belum siap sebelum WiFi selesai asosiasi) — esp-mqtt retry otomatis, `[mqtt]
 connected` menyusul dalam beberapa detik; ini bukan bug. Jika BESS/simulator belum
-menyala, `[bess]` akan langsung berkata `COMM_LOST` (bukan macet) — lihat
-§"comm_lost" di bawah.
+menyala, `[bess]` akan berkata `COMM_LOST` (bukan macet) setelah **~25 dtk** — lihat
+§"comm_lost" di bawah untuk rinciannya.
 
 ## Arsitektur task (FreeRTOS)
 
@@ -72,8 +73,8 @@ menyala, `[bess]` akan langsung berkata `COMM_LOST` (bukan macet) — lihat
 |---|---|---|
 | `loop()` (Arduino) | 1 | Tick WiFi reconnect, LED status, kirim telemetri MQTT tiap `TELEMETRY_PERIOD_MS` (60 dtk) |
 | `task_bess` (`task_bess.cpp`) | 3 | Poll Modbus BESS tiap `POLL_PERIOD_MS` (1,5 dtk): telemetri `1050..1108` → alarm `2050..2057` → setpoint `3050` → param `3146..3184`; decode ke `BessData`; tandai `comm_lost` setelah `COMM_LOST_AFTER`=3 siklus gagal beruntun |
-| `task_cmd` (`task_cmd.cpp`) | 2 | Antrian command dari MQTT (`taskCmdSubmit`); eksekusi `enable`/`disable`/`set_power` via Modbus, tunggu bukti nyata (bit status atau readback), kirim ack |
-| `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Connect + LWT `device/<gw>/status`, subscribe `device/<gw>/command`, publish telemetri (`enqueue`, non-blocking) & ack (`publish`, QoS1) |
+| `task_cmd` (`task_cmd.cpp`) | 2 | Antrian command dari MQTT (`taskCmdSubmit`); eksekusi `enable`/`disable`/`set_output` (alias `set_power`) via Modbus, tunggu bukti nyata (bit status atau readback), kirim ack |
+| `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Connect + LWT `device/<gw>/status`, subscribe `device/<gw>/command`, publish telemetri & ack lewat `enqueue` (non-blocking, QoS1) |
 | `wifi_mgr` | — (dipanggil dari `loop()`) | Station WiFi, `country code "ID"`, reconnect exponential backoff (tidak blocking boot) |
 | `state.h` (`g_state`) | — | `BessData` + `seq` tunggal, dilindungi mutex (`stateLock`/`stateUnlock`) — dibaca `task_bess` (tulis) dan `loop()`/`task_cmd` (baca) |
 
@@ -112,7 +113,9 @@ yang baru.
     "device_id": "58E6C5218C78",
     "uptime_ms": 723004,
     "time_valid": true,
-    "network": {"ssid": "...", "ip": "192.168.18.52", "rssi": -54},
+    "last_reset_reason": "POWERON",
+    "boot_count": 12,
+    "network": {"ssid": "...", "ip": "192.168.18.52", "rssi_dbm": -54},
     "bess": {
       "grid_voltage_ab_v": 398.2, "grid_voltage_bc_v": 397.9, "grid_voltage_ca_v": 398.5,
       "grid_current_a_a": 7.2, "grid_current_b_a": 7.1, "grid_current_c_a": 7.3,
@@ -136,6 +139,15 @@ yang baru.
 firmware), `status_decoded` berisi semua bit bernama dari `2057`. Ukuran payload
 ~3–4 KB (terukur ~3,3 KB) (vs ±14 KB blok `dcon`+`bms` di sistem lama).
 
+**`ts`**: detik epoch UTC, atau **`0` kalau jam gateway belum sinkron NTP** — jangan
+dibaca sebagai tahun 1970. Berlaku untuk `ts` di envelope maupun di ack, dan
+`data.time_valid` adalah cerminan langsung dari `ts != 0`.
+
+**`last_reset_reason` / `boot_count`**: alasan reset terakhir (nama enum ESP-IDF, mis.
+`POWERON`, `PANIC`, `BROWNOUT`; `UNKNOWN_<angka>` untuk nilai tak dikenal) dan pencacah
+boot monotonik dari NVS. `boot_count` yang naik tanpa sebab yang diketahui = gateway
+restart sendiri; itu sinyal, bukan derau.
+
 **`comm_lost`**: begitu true, `active_power_kw`/`soc_percent`/dll **mempertahankan
 nilai terakhir yang diketahui** (bukan dipaksa nol) — flag `comm_lost` itu sendiri
 adalah sinyal kebenarannya, konsumen di cloud harus memeriksanya, bukan menyimpulkan
@@ -147,7 +159,8 @@ dari angka nol.
 |---|---|---|---|
 | `enable` | `{"cmd":"enable"}` | FC5 `5050=0xFF00`, tunggu bit *Run* (bit 6) di reg 2057 ≤10 dtk | `result:"accepted"` |
 | `disable` | `{"cmd":"disable"}` | FC5 `5050=0x0000`, tunggu bit *Shutdown* (bit 11) ≤10 dtk | `result:"accepted"` |
-| `set_power` | `{"cmd":"set_power","args":{"power_w":5000}}` | Validasi ≤120% rated (`3146`) → FC6 `3050` (0,1% dari rated; **positif = ekspor/discharge, negatif = charge**) → baca balik untuk konfirmasi | `result:"accepted"`, `applied:{"power_pct":10,"power_w":5000}` |
+| `set_output` | `{"cmd":"set_output","args":{"power_w":5000}}` | Validasi rated (`3146`) → pangkas ke ±120% → FC6 `3050` (0,1% dari rated; **positif = ekspor/discharge, negatif = charge**) → baca balik untuk konfirmasi | `result:"accepted"` (atau `"clamped"`), `applied:{"power_pct":10,"power_w":5000}` |
+| `set_power` | sama dengan `set_output` | Alias lama fase 1, perilaku identik | sama |
 
 Tanpa `dcon_code` — konsep itu khusus firmware DCON lama; BESS asli tidak
 memilikinya dan simulator wajib meniru device asli apa adanya (lihat D5 di spec
@@ -159,21 +172,26 @@ desain). Pengaman pengganti: `enable` ditolak saat `fault` aktif atau `comm_lost
 {"id":"878f4bb6","cmd":"enable","result":"accepted","detail":"","applied":{},"ts":1786299831}
 ```
 
-`result` selalu `"accepted"` atau `"rejected"`. Alasan tolak (`detail`):
+`result` bernilai `"accepted"`, `"clamped"`, atau `"rejected"`. `"clamped"` berarti
+perintah dijalankan tetapi nilainya dipangkas ke batas device (±120% rated) — `applied`
+selalu berisi nilai yang **benar-benar dipakai**, bukan yang diminta.
+
+Alasan tolak (`detail`):
 
 | `detail` | Kapan |
 |---|---|
 | `bad_json` | Payload command bukan JSON valid |
-| `unsupported_cmd` | `cmd` bukan `enable`/`disable`/`set_power` |
-| `bad_value` | `set_power` tanpa `power_w`, atau \|power_w\| > 120% rated power |
+| `unsupported_cmd` | `cmd` bukan `enable`/`disable`/`set_output`/`set_power` |
+| `bad_value` | `set_output`/`set_power` tanpa `power_w`, atau `args.target` selain `1` |
 | `comm_lost` | Modbus ke BESS sedang putus (≥3 poll gagal beruntun) — command tidak dicoba sama sekali |
 | `bess_fault` | `enable` ditolak karena BESS sedang dalam kondisi fault |
 | `bess_no_ack` | Tulisan Modbus gagal (timeout/exception non-busy) setelah retry, atau bukti transisi (bit status) tidak muncul dalam 10 dtk |
-| `bess_busy` | `set_power` ditolak dengan exception Modbus 06 (device sedang di tengah transisi state) |
-| `readback_mismatch` | `set_power` tertulis tapi nilai baca-balik dari register tidak cocok dengan yang ditulis |
+| `bess_busy` | `set_output`/`set_power` ditolak dengan exception Modbus 06 (device sedang di tengah transisi state) |
+| `readback_mismatch` | `set_output`/`set_power` tertulis tapi nilai baca-balik dari register tidak cocok dengan yang ditulis |
+| `queue_full` | antrean perintah penuh; perintah tidak dijalankan, silakan kirim ulang |
 
-`applied` kosong (`{}`) untuk `enable`/`disable`; untuk `set_power` sukses berisi
-`power_pct` (persen rated yang benar-benar tertulis) dan `power_w` (setara watt).
+`applied` kosong (`{}`) untuk `enable`/`disable`; untuk `set_output`/`set_power` sukses
+berisi `power_pct` (persen rated yang benar-benar tertulis) dan `power_w` (setara watt).
 
 ## `comm_lost`
 
@@ -182,6 +200,16 @@ Dinaikkan oleh `task_bess` setelah 3 siklus poll Modbus gagal beruntun
 — tidak perlu reboot gateway maupun restart manual apa pun. Command yang masuk
 selagi `comm_lost=true` langsung ditolak (`detail:"comm_lost"`) tanpa mencoba
 Modbus sama sekali, supaya tidak menggantung menunggu bus yang memang sedang mati.
+
+**Biaya waktu nyata: ~25 dtk saat device benar-benar tidak merespons**, bukan sesaat.
+Sejak short-circuit dihapus (paritas dengan firmware rekan kerja), setiap siklus poll
+mencoba **keempat** blok register (telemetri, alarm, setpoint, param) dengan timeout+retry
+penuh masing-masing, bukan berhenti di blok pertama yang gagal — satu siklus poll saat
+bus mati memakan **~7,2 dtk**. Tiga siklus gagal beruntun (`COMM_LOST_AFTER`=3) ditambah
+jeda antar-siklus ~1,5 dtk ⇒ **≈3×7,2 + 1,5 ≈ 24–25 dtk** dari device berhenti merespons
+sampai `comm_lost` naik. Ini naik dari ~8–9 dtk sebelumnya (short-circuit lama berhenti
+di kegagalan pertama per siklus). Tim cloud yang menyetel timeout command dari angka ini
+harus memakai **~25 dtk**, bukan `[bess]` "langsung" seperti kesan di §Prasyarat di atas.
 
 ## Non-scope fase ini
 

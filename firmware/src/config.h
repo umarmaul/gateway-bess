@@ -25,5 +25,7 @@
 // MQTT
 #define MQTT_KEEPALIVE_S       300
 #define MQTT_NETWORK_TIMEOUT_MS 60000
+#define MQTT_WRITE_BUFFER      24576   // sama dengan BEPESP32_WiFi_Extension
+#define MQTT_READ_BUFFER       2048
 #define TELEMETRY_PERIOD_MS    60000
 #define FW_VERSION         "bess-0.1.0"

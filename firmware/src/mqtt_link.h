@@ -5,4 +5,4 @@
 void mqttInit(const char* gw);                        // connect + LWT + subscribe command
 bool mqttConnected();
 bool mqttEnqueueTelemetry(const char* json, size_t n); // esp_mqtt_client_enqueue QoS1
-bool mqttPublishAck(const char* json, size_t n);       // esp_mqtt_client_publish QoS1
+bool mqttPublishAck(const char* json, size_t n);       // esp_mqtt_client_enqueue QoS1

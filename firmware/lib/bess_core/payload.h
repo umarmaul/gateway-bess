@@ -8,11 +8,12 @@
 struct SysInfo {
     char gw[13];              // MAC 12 hex + NUL
     const char* fw_version;   // "bess-0.1.0"
-    uint32_t uptime_ms, seq, ts;
-    bool time_valid;
+    uint32_t uptime_ms, seq, ts;   // ts mentah; buildTelemetryJson yang menolkan
     int rssi;
     const char* ssid;
     char ip[16];
+    const char* last_reset_reason;   // hasil resetReasonName(), mis. "PANIC"
+    uint32_t boot_count;             // pencacah monotonik di NVS
 };
 
 // Builds telemetry JSON per spec §6.1

@@ -3,6 +3,7 @@
 #include <esp_wifi.h>
 #include "config.h"
 #include "secrets.h"
+#include "timeutil.h"
 
 static uint32_t next_try_ms = 0;
 static uint32_t backoff_ms = 4000;
@@ -11,14 +12,23 @@ void wifiInit() {
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     esp_wifi_set_country_code("ID", true);      // kanal 1-13 (pelajaran reason=203)
+    WiFi.setSleep(false);                       // modem sleep OFF (latensi + EMI)
     WiFi.setAutoReconnect(false);               // wifiTick satu-satunya driver
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 }
 
 void wifiTick() {
-    if (WiFi.status() == WL_CONNECTED) { backoff_ms = 4000; return; }
+    if (WiFi.status() == WL_CONNECTED) {
+        backoff_ms = 4000;
+        // Jaga next_try_ms tetap dekat dengan waktu sekarang. Kalau dibiarkan
+        // basi berminggu-minggu, selisihnya melewati jendela 2^31 ms yang
+        // dibutuhkan timeAfter() dan percobaan reconnect pertama sesudah putus
+        // akan gagal dievaluasi — varian dari bug rollover yang sama.
+        next_try_ms = millis();
+        return;
+    }
     uint32_t now = millis();
-    if (now >= next_try_ms) {
+    if (timeAfter(now, next_try_ms)) {
         WiFi.disconnect();
         WiFi.begin(WIFI_SSID, WIFI_PASS);
         next_try_ms = now + backoff_ms;

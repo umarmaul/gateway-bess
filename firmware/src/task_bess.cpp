@@ -8,11 +8,25 @@
 static void pollOnce(bool& ok) {
     uint16_t telem[REG_TELEM_COUNT], alst[REG_ALARM_COUNT], pset[1],
              param[REG_PARAM_COUNT];
-    uint8_t exc;
-    ok = mbReadRegs(BESS_NODE, REG_TELEM_START, REG_TELEM_COUNT, telem, &exc) == MB_OK
-      && mbReadRegs(BESS_NODE, REG_ALARM_START, REG_ALARM_COUNT, alst, &exc) == MB_OK
-      && mbReadRegs(BESS_NODE, REG_P_SET, 1, pset, &exc) == MB_OK
-      && mbReadRegs(BESS_NODE, REG_PARAM_START, REG_PARAM_COUNT, param, &exc) == MB_OK;
+    uint8_t exc = 0;
+    struct { const char* nama; MbStatus st; uint8_t exc; } blok[4];
+    blok[0] = {"telem", mbReadRegs(BESS_NODE, REG_TELEM_START, REG_TELEM_COUNT, telem, &exc), exc};
+    exc = 0;
+    blok[1] = {"alarm", mbReadRegs(BESS_NODE, REG_ALARM_START, REG_ALARM_COUNT, alst, &exc), exc};
+    exc = 0;
+    blok[2] = {"pset", mbReadRegs(BESS_NODE, REG_P_SET, 1, pset, &exc), exc};
+    exc = 0;
+    blok[3] = {"param", mbReadRegs(BESS_NODE, REG_PARAM_START, REG_PARAM_COUNT, param, &exc), exc};
+
+    ok = true;
+    for (int i = 0; i < 4; i++) {
+        if (blok[i].st == MB_OK) continue;
+        ok = false;
+        if (blok[i].st == MB_EXCEPTION)
+            Serial.printf("[bess] blok %s: exception 0x%02X\n", blok[i].nama, blok[i].exc);
+        else
+            Serial.printf("[bess] blok %s: gagal (status %d)\n", blok[i].nama, (int)blok[i].st);
+    }
     if (!ok) return;
     stateLock();
     BessData& d = g_state.bess;

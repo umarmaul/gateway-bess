@@ -11,12 +11,18 @@
 
 struct RawCmd { char json[512]; size_t len; };
 static QueueHandle_t q;
+static QueueHandle_t q_luapan;   // 1 slot: perintah yang ditolak karena antrean penuh
 
 void taskCmdSubmit(const char* json, size_t n) {
     RawCmd rc{};
     rc.len = min(n, sizeof(rc.json) - 1);
     memcpy(rc.json, json, rc.len);
-    xQueueSend(q, &rc, 0);
+    if (xQueueSend(q, &rc, 0) == pdTRUE) return;
+    // Antrean utama penuh. JSON tidak boleh di-parse di sini (ini task jaringan
+    // esp-mqtt), jadi payload mentah dititipkan ke slot luapan; task_cmd yang
+    // mem-parse id-nya dan membalas queue_full.
+    if (xQueueSend(q_luapan, &rc, 0) != pdTRUE)
+        Serial.println("[cmd] dibuang: antrean utama dan luapan penuh");
 }
 
 static uint32_t nowTs() { return (uint32_t)time(nullptr); }
@@ -52,7 +58,11 @@ static void doOnOff(const Command& c, bool on) {
     MbStatus st = MB_TIMEOUT;
     for (int i = 0; i < 20; i++) {                    // busy (exc 6) → coba lagi
         st = mbWrite5(BESS_NODE, REG_ONOFF, on, &exc);
-        if (st == MB_OK || (st == MB_EXCEPTION && exc != 6)) break;
+        // Hanya exception busy (06) yang layak diulang. MB_OK selesai; exception
+        // lain, timeout, CRC, dan frame cacat semuanya berarti bus tidak akan
+        // membaik dengan diulang 20x — keluar segera supaya slot antrean tidak
+        // tersandera sampai puluhan detik saat bus benar-benar mati.
+        if (st != MB_EXCEPTION || exc != 6) break;
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     if (st != MB_OK) { sendAck(c, "rejected", "bess_no_ack"); return; }
@@ -63,14 +73,18 @@ static void doOnOff(const Command& c, bool on) {
 
 static void doSetPower(const Command& c) {
     if (!c.has_power) { sendAck(c, "rejected", "bad_value"); return; }
+    if (isnan(c.power_w)) { sendAck(c, "rejected", "bad_value"); return; }
     stateLock();
     bool lost = g_state.bess.comm_lost;
     float rated_w = g_state.bess.rated_kw * 1000.0f;
     stateUnlock();
     if (lost) { sendAck(c, "rejected", "comm_lost"); return; }
-    if (rated_w <= 0) { sendAck(c, "rejected", "bess_no_ack"); return; }
-    float pct = c.power_w / rated_w * 100.0f;
-    if (fabsf(pct) > 120.0f) { sendAck(c, "rejected", "bad_value"); return; }
+    float pct = 0.0f;
+    bool clamped = false;
+    if (!planPowerPct(c.power_w, rated_w, pct, clamped)) {
+        sendAck(c, "rejected", "bess_no_ack");   // rated belum diketahui
+        return;
+    }
     int16_t raw = (int16_t)lroundf(pct * 10.0f);
     uint8_t exc = 0;
     if (mbWrite6(BESS_NODE, REG_P_SET, (uint16_t)raw, &exc) != MB_OK) {
@@ -83,15 +97,31 @@ static void doSetPower(const Command& c) {
         sendAck(c, "rejected", "readback_mismatch");
         return;
     }
-    sendAck(c, "accepted", "", raw / 10.0f, raw / 1000.0f * rated_w / 10.0f * 10.0f);
+    float applied_pct = raw / 10.0f;
+    sendAck(c, clamped ? "clamped" : "accepted", "",
+            applied_pct, applied_pct / 100.0f * rated_w);
 }
 
 static void run(void*) {
     RawCmd rc;
     for (;;) {
         if (xQueueReceive(q, &rc, portMAX_DELAY) != pdTRUE) continue;
+        // Kuras luapan lebih dulu supaya cloud mendapat jawaban secepat mungkin
+        RawCmd luapan;
+        while (xQueueReceive(q_luapan, &luapan, 0) == pdTRUE) {
+            Command lc;
+            parseCommand(luapan.json, luapan.len, lc);
+            sendAck(lc, "rejected", "queue_full");
+        }
         Command c;
         parseCommand(rc.json, rc.len, c);
+        // BESS adalah node tunggal. Sebelumnya target diabaikan diam-diam,
+        // sehingga perintah untuk node lain dijalankan di node ini.
+        if ((c.type == Command::ENABLE || c.type == Command::DISABLE ||
+             c.type == Command::SET_POWER) && c.target != 1) {
+            sendAck(c, "rejected", "bad_value");
+            continue;
+        }
         switch (c.type) {
             case Command::ENABLE:  doOnOff(c, true); break;
             case Command::DISABLE: doOnOff(c, false); break;
@@ -104,5 +134,6 @@ static void run(void*) {
 
 void taskCmdStart() {
     q = xQueueCreate(4, sizeof(RawCmd));
+    q_luapan = xQueueCreate(1, sizeof(RawCmd));
     xTaskCreate(run, "task_cmd", 6144, nullptr, 2, nullptr);
 }

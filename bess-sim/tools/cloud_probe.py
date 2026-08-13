@@ -16,7 +16,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("watch")
     sub.add_parser("enable"); sub.add_parser("disable")
-    ps = sub.add_parser("set_power"); ps.add_argument("--watt", type=float, required=True)
+    for nama in ("set_output", "set_power"):     # set_output resmi, set_power alias
+        ps = sub.add_parser(nama); ps.add_argument("--watt", type=float, required=True)
     a = ap.parse_args()
 
     cli = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -30,9 +31,11 @@ def main():
             doc = json.loads(m.payload)
             if "data" in doc:
                 b = doc["data"].get("bess", {})
-                print(f"seq={doc['seq']} type={doc['data'].get('device_type')} "
+                d = doc["data"]
+                print(f"seq={doc['seq']} type={d.get('device_type')} "
                       f"p={b.get('active_power_kw')}kW soc={b.get('soc_percent')}% "
-                      f"running={b.get('running')} comm_lost={b.get('comm_lost')}")
+                      f"running={b.get('running')} comm_lost={b.get('comm_lost')} "
+                      f"reset={d.get('last_reset_reason')} boot={d.get('boot_count')}")
             else:
                 print(json.dumps(doc, indent=1))
         except json.JSONDecodeError:
@@ -43,7 +46,7 @@ def main():
                    (f"device/{a.gw}/command/ack", 1),
                    (f"device/{a.gw}/status", 1)])
     if a.cmd != "watch":
-        args = {"power_w": a.watt} if a.cmd == "set_power" else {}
+        args = {"power_w": a.watt} if a.cmd in ("set_output", "set_power") else {}
         payload = {"id": str(uuid.uuid4())[:8], "ts": int(time.time()),
                    "cmd": a.cmd, "args": args, "api_schema_version": 1}
         cli.publish(f"device/{a.gw}/command", json.dumps(payload), qos=1)
