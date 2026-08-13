@@ -55,7 +55,7 @@
 - Consumes: —
 - Produces: slot aplikasi `0x1E0000` (1.966.080 B) dan partisi `coredump` 64 KB di `0x3F0000`, dipakai Task 2 dan 3.
 
-- [ ] **Step 1: Buat tabel partisi**
+- [x] **Step 1: Buat tabel partisi**
 
 Buat `firmware/partitions.csv` — disalin apa adanya dari `BEPESP32_WiFi_Extension:origin/gateway-mqtt:partitions.csv` karena hardware-nya identik:
 
@@ -71,7 +71,7 @@ spiffs,   data, spiffs,  0x3D0000,0x20000,
 coredump, data, coredump,0x3F0000,0x10000,
 ```
 
-- [ ] **Step 2: Daftarkan di platformio.ini**
+- [x] **Step 2: Daftarkan di platformio.ini**
 
 Di `firmware/platformio.ini`, pada blok `[env:esp32c6]`, tambahkan satu baris tepat sesudah `framework = arduino`:
 
@@ -79,7 +79,7 @@ Di `firmware/platformio.ini`, pada blok `[env:esp32c6]`, tambahkan satu baris te
 board_build.partitions = partitions.csv
 ```
 
-- [ ] **Step 3: Build dan periksa ukuran slot berubah**
+- [x] **Step 3: Build dan periksa ukuran slot berubah**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio run -e esp32c6
@@ -87,7 +87,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: SUCCESS, dan baris `Flash:` sekarang menyebut **`from 1966080 bytes`** (bukan `1310720`), dengan persentase turun ke sekitar **59%**. Kalau angkanya masih 1310720, `board_build.partitions` tidak terbaca — periksa nama file dan lokasinya (harus di `firmware/`, sejajar `platformio.ini`).
 
-- [ ] **Step 4: Hapus flash lalu upload**
+- [x] **Step 4: Hapus flash lalu upload**
 
 Offset `nvs` dan `otadata` berpindah, jadi isi lama tidak valid lagi. Wajib erase penuh:
 
@@ -95,7 +95,7 @@ Offset `nvs` dan `otadata` berpindah, jadi isi lama tidak valid lagi. Wajib eras
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio run -e esp32c6 -t erase --upload-port COM3 && pio run -e esp32c6 -t upload --upload-port COM3
 ```
 
-- [ ] **Step 5: Pastikan gateway hidup normal di layout baru**
+- [x] **Step 5: Pastikan gateway hidup normal di layout baru**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio device monitor --port COM3 --baud 115200
@@ -103,7 +103,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan dalam 30 detik pertama: baris `[boot] gateway-bess bess-0.1.0`, `[boot] gw=58E6C5218C78`, lalu `[wifi] OK ...` dan `[mqtt] connected`. Hentikan monitor dengan Ctrl+C.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess" && git add firmware/partitions.csv firmware/platformio.ini && git commit -m "build(fw): tabel partisi 2x1,875 MB + partisi coredump
@@ -136,7 +136,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   - Field baru di `SysInfo`: `const char* last_reset_reason; uint32_t boot_count;`
   - Field baru di telemetri: `data.last_reset_reason` (string), `data.boot_count` (integer).
 
-- [ ] **Step 1: Tulis tes yang gagal untuk pemetaan nama alasan reset**
+- [x] **Step 1: Tulis tes yang gagal untuk pemetaan nama alasan reset**
 
 Di `firmware/test/test_native_payload/main.cpp`, tambahkan `#include "reset_info.h"` di blok include atas, lalu sisipkan fungsi tes ini tepat sebelum `static void test_parse_enable() {`:
 
@@ -152,7 +152,7 @@ static void test_reset_reason_name() {
 }
 ```
 
-- [ ] **Step 2: Tulis tes yang gagal untuk field telemetri baru**
+- [x] **Step 2: Tulis tes yang gagal untuk field telemetri baru**
 
 Sisipkan tepat sesudah fungsi di Step 1:
 
@@ -179,7 +179,7 @@ Daftarkan keduanya di `main()`, tepat sesudah baris `RUN_TEST(test_telemetry_env
     RUN_TEST(test_telemetry_diagnostik_boot);
 ```
 
-- [ ] **Step 3: Jalankan tes, pastikan GAGAL**
+- [x] **Step 3: Jalankan tes, pastikan GAGAL**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native -f test_native_payload
@@ -187,7 +187,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: build **error** `reset_info.h: No such file or directory`. Itu belum kegagalan yang benar — lanjut ke Step 4 dulu, lalu jalankan lagi dan pastikan yang muncul adalah **kegagalan assert**, bukan error kompilasi.
 
-- [ ] **Step 4: Buat header dengan konstanta, tanpa implementasi**
+- [x] **Step 4: Buat header dengan konstanta, tanpa implementasi**
 
 Buat `firmware/lib/bess_core/reset_info.h`:
 
@@ -231,7 +231,7 @@ const char* resetReasonName(int reason, char* out, size_t cap) {
 }
 ```
 
-- [ ] **Step 5: Jalankan tes lagi, pastikan gagal karena assert**
+- [x] **Step 5: Jalankan tes lagi, pastikan gagal karena assert**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native -f test_native_payload
@@ -239,7 +239,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: `test_reset_reason_name` FAILED dengan `Expected 'POWERON' Was 'BELUM'`, dan `test_telemetry_diagnostik_boot` FAILED karena `last_reset_reason` belum ada di JSON.
 
-- [ ] **Step 6: Implementasi pemetaan nama**
+- [x] **Step 6: Implementasi pemetaan nama**
 
 Ganti seluruh isi `firmware/lib/bess_core/reset_info.cpp`:
 
@@ -265,7 +265,7 @@ const char* resetReasonName(int reason, char* out, size_t cap) {
 }
 ```
 
-- [ ] **Step 7: Tambahkan field diagnostik ke payload**
+- [x] **Step 7: Tambahkan field diagnostik ke payload**
 
 Di `firmware/lib/bess_core/payload.h`, ubah struct `SysInfo` — tambahkan dua field tepat sesudah baris `char ip[16];`:
 
@@ -281,7 +281,7 @@ Di `firmware/lib/bess_core/payload.cpp`, tambahkan dua baris tepat sesudah `data
     data["boot_count"] = s.boot_count;
 ```
 
-- [ ] **Step 8: Jalankan seluruh suite native, pastikan hijau**
+- [x] **Step 8: Jalankan seluruh suite native, pastikan hijau**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native
@@ -289,7 +289,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: **25 test cases, 25 succeeded** (23 lama + 2 baru).
 
-- [ ] **Step 9: Sambungkan di main.cpp**
+- [x] **Step 9: Sambungkan di main.cpp**
 
 Di `firmware/src/main.cpp`, tambahkan include berikut di blok include atas:
 
@@ -339,7 +339,7 @@ Di blok telemetri dalam `loop()`, tepat sesudah `si.fw_version = FW_VERSION;`, s
         si.boot_count = g_boot_count;
 ```
 
-- [ ] **Step 10: Build firmware**
+- [x] **Step 10: Build firmware**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio run -e esp32c6
@@ -347,7 +347,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: SUCCESS. Kalau salah satu `static_assert` gagal, jangan diakali dengan mengubah `reset_info.h` sembarangan — periksa nilai enum sebenarnya di `esp_system.h` SDK, perbaiki tabel `NAMA` **dan** konstantanya bersama-sama, lalu jalankan ulang tes native.
 
-- [ ] **Step 11: Tampilkan field baru di probe**
+- [x] **Step 11: Tampilkan field baru di probe**
 
 Di `bess-sim/tools/cloud_probe.py`, di dalam `on_msg`, ganti baris `print(f"seq={doc['seq']} ...")` (blok `if "data" in doc:`) menjadi:
 
@@ -359,7 +359,7 @@ Di `bess-sim/tools/cloud_probe.py`, di dalam `on_msg`, ganti baris `print(f"seq=
                       f"reset={d.get('last_reset_reason')} boot={d.get('boot_count')}")
 ```
 
-- [ ] **Step 12: Flash dan verifikasi di bench**
+- [x] **Step 12: Flash dan verifikasi di bench**
 
 Nyalakan simulator lebih dulu (ganti `COM11` dengan port CH340 yang sedang aktif):
 
@@ -383,7 +383,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/bess-sim" && uv run --with
 
 Harapan: baris telemetri memuat `reset=SW boot=<n>` yang cocok dengan serial.
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess" && git add firmware/lib/bess_core/reset_info.h firmware/lib/bess_core/reset_info.cpp firmware/lib/bess_core/payload.h firmware/lib/bess_core/payload.cpp firmware/src/main.cpp firmware/test/test_native_payload/main.cpp bess-sim/tools/cloud_probe.py && git commit -m "feat(fw): diagnostik boot - alasan reset + cacah boot ke serial dan telemetri
@@ -411,7 +411,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `data.last_reset_reason` dan `data.boot_count` dari Task 2; partisi `coredump` dari Task 1.
 - Produces: kesimpulan tertulis — akar penyebab + perbaikan, **atau** pernyataan jujur "belum tereproduksi".
 
-- [ ] **Step 1: Masukkan alat reproduksi ke repo**
+- [x] **Step 1: Masukkan alat reproduksi ke repo**
 
 Buat `bess-sim/tools/kick_probe.py`:
 
@@ -481,11 +481,11 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Catat baseline sebelum tes**
+- [x] **Step 2: Catat baseline sebelum tes**
 
 Jalankan probe `watch` sebentar dan catat `boot_count` saat ini. Angka ini yang dipakai membuktikan ada/tidaknya reboot — **jangan** mengandalkan log serial, karena monitor mati diam-diam saat board reset.
 
-- [ ] **Step 3: Jalankan reproduksi, tiga kali**
+- [x] **Step 3: Jalankan reproduksi, tiga kali**
 
 Simulator harus hidup. Untuk tiap percobaan:
 
@@ -495,7 +495,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/bess-sim" && uv run --with
 
 Catat `boot_count` sesudah tiap percobaan. Naik = reboot terjadi.
 
-- [ ] **Step 4: Kalau reboot terjadi — baca coredump**
+- [x] **Step 4: Kalau reboot terjadi — baca coredump**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio run -e esp32c6 -t upload --upload-port COM3 --target nobuild 2>/dev/null; python -m esp_coredump info_corefile --port COM3 --chip esp32c6 .pio/build/esp32c6/firmware.elf
@@ -503,15 +503,15 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Kalau `esp_coredump` belum terpasang, jalankan `pip install esp-coredump` lebih dulu. Bacalah `last_reset_reason` di telemetri sebagai konfirmasi silang: `PANIC` berarti exception yang seharusnya punya coredump; `TASK_WDT`/`INT_WDT` berarti watchdog; `BROWNOUT` berarti masalah catu daya, bukan perangkat lunak — dan kalau `BROWNOUT` yang muncul, hentikan pencarian di perangkat lunak dan laporkan sebagai temuan hardware.
 
-- [ ] **Step 5: Perbaiki akar penyebab, lalu buktikan**
+- [x] **Step 5: Perbaiki akar penyebab, lalu buktikan**
 
 Perbaikan bergantung temuan, jadi tidak bisa ditulis di muka. Yang tidak boleh berubah: perbaikannya harus menjawab persis apa yang ditunjukkan coredump/alasan reset, dan sesudah diperbaiki **tes yang sama di Step 3 dijalankan tiga kali lagi** dengan `boot_count` yang tidak naik sama sekali.
 
-- [ ] **Step 6: Kalau tidak tereproduksi dalam tiga percobaan — laporkan apa adanya**
+- [x] **Step 6: Kalau tidak tereproduksi dalam tiga percobaan — laporkan apa adanya**
 
 Tulis temuan di pesan commit: berapa kali dicoba, `boot_count` awal dan akhir, berapa lama tiap percobaan. **Jangan menulis "diperbaiki".** Instrumentasi dari Task 2 tetap terpasang supaya kejadian berikutnya tertangkap sendiri.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess" && git add bess-sim/tools/kick_probe.py && git commit -m "test(bench): alat reproduksi rebutan client_id + hasil percobaan
@@ -535,7 +535,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `taskCmdSubmit(const char*, size_t)` dari `task_cmd.h`.
 - Produces: tidak ada perubahan tanda tangan; hanya perilaku.
 
-- [ ] **Step 1: Naikkan ukuran buffer**
+- [x] **Step 1: Naikkan ukuran buffer**
 
 Di `firmware/src/mqtt_link.cpp`, di dalam `mqttInit()`, tambahkan dua baris tepat sesudah `cfg.network.timeout_ms = MQTT_NETWORK_TIMEOUT_MS;`:
 
@@ -551,7 +551,7 @@ Di `firmware/src/config.h`, tambahkan dua baris tepat sesudah `#define MQTT_NETW
 #define MQTT_READ_BUFFER       2048
 ```
 
-- [ ] **Step 2: Tambahkan penjaga pesan terpotong**
+- [x] **Step 2: Tambahkan penjaga pesan terpotong**
 
 Di `firmware/src/mqtt_link.cpp`, ganti seluruh blok `case MQTT_EVENT_DATA:` menjadi:
 
@@ -574,7 +574,7 @@ Di `firmware/src/mqtt_link.cpp`, ganti seluruh blok `case MQTT_EVENT_DATA:` menj
         }
 ```
 
-- [ ] **Step 3: Ack lewat enqueue, bukan publish**
+- [x] **Step 3: Ack lewat enqueue, bukan publish**
 
 Ganti isi `mqttPublishAck` menjadi:
 
@@ -587,7 +587,7 @@ bool mqttPublishAck(const char* json, size_t n) {
 }
 ```
 
-- [ ] **Step 4: Build**
+- [x] **Step 4: Build**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio run -e esp32c6
@@ -595,7 +595,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: SUCCESS. Catat angka RAM — kenaikannya harus sekitar 26 KB dan totalnya tetap jauh di bawah 50%.
 
-- [ ] **Step 5: Verifikasi di bench**
+- [x] **Step 5: Verifikasi di bench**
 
 Flash, lalu jalankan satu round-trip perintah dan tunggu satu telemetri:
 
@@ -605,7 +605,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/bess-sim" && uv run --with
 
 Harapan: ack `accepted` tetap datang seperti sebelumnya, dan telemetri berikutnya tetap ~3,3 KB. Perubahan ini tidak boleh mengubah apa pun yang terlihat dari luar — kalau ada yang berubah, itu regresi.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess" && git add firmware/src/mqtt_link.cpp firmware/src/config.h && git commit -m "fix(fw): hardening MQTT - buffer, penjaga pesan terpotong, ack via enqueue
@@ -629,7 +629,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `Command`, `parseCommand()`, `buildAckJson()` dari `commands.h`.
 - Produces: field baru `uint32_t target;` di `Command` (default `1` kalau `args.target` tidak ada); `Command::SET_POWER` sekarang cocok untuk nama `set_output` maupun `set_power`.
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [x] **Step 1: Tulis tes yang gagal**
 
 Di `firmware/test/test_native_payload/main.cpp`, sisipkan tepat sesudah `test_parse_set_power`:
 
@@ -668,7 +668,7 @@ Daftarkan ketiganya di `main()` tepat sesudah `RUN_TEST(test_parse_set_power);`:
     RUN_TEST(test_parse_target_eksplisit);
 ```
 
-- [ ] **Step 2: Jalankan, pastikan gagal**
+- [x] **Step 2: Jalankan, pastikan gagal**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native -f test_native_payload
@@ -676,7 +676,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: error kompilasi `'struct Command' has no member named 'target'`. Tambahkan field-nya lebih dulu (Step 3), lalu jalankan lagi dan pastikan yang tersisa adalah kegagalan assert.
 
-- [ ] **Step 3: Tambahkan field target**
+- [x] **Step 3: Tambahkan field target**
 
 Di `firmware/lib/bess_core/commands.h`, tambahkan satu baris di dalam `struct Command` tepat sesudah `bool has_power;`:
 
@@ -684,7 +684,7 @@ Di `firmware/lib/bess_core/commands.h`, tambahkan satu baris di dalam `struct Co
     uint32_t target;    // node tujuan; default 1 (BESS node tunggal)
 ```
 
-- [ ] **Step 4: Implementasi parsing**
+- [x] **Step 4: Implementasi parsing**
 
 Di `firmware/lib/bess_core/commands.cpp`, di dalam `parseCommand`, ganti blok pengenalan nama menjadi:
 
@@ -702,7 +702,7 @@ Di `firmware/lib/bess_core/commands.cpp`, di dalam `parseCommand`, ganti blok pe
     } else out.type = Command::UNSUPPORTED;
 ```
 
-- [ ] **Step 5: Jalankan seluruh suite, pastikan hijau**
+- [x] **Step 5: Jalankan seluruh suite, pastikan hijau**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native
@@ -710,7 +710,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: **28 test cases, 28 succeeded**.
 
-- [ ] **Step 6: Tolak target selain 1 di task_cmd**
+- [x] **Step 6: Tolak target selain 1 di task_cmd**
 
 Di `firmware/src/task_cmd.cpp`, di dalam `run()`, sisipkan tepat sesudah `parseCommand(rc.json, rc.len, c);`:
 
@@ -724,7 +724,7 @@ Di `firmware/src/task_cmd.cpp`, di dalam `run()`, sisipkan tepat sesudah `parseC
         }
 ```
 
-- [ ] **Step 7: Ajarkan probe mengenal `set_output`**
+- [x] **Step 7: Ajarkan probe mengenal `set_output`**
 
 Tanpa ini `set_output` tidak bisa diuji di bench sama sekali. Di `bess-sim/tools/cloud_probe.py`, ganti baris `ps = sub.add_parser("set_power"); ps.add_argument("--watt", type=float, required=True)` menjadi:
 
@@ -739,7 +739,7 @@ Dan ganti baris `args = {"power_w": a.watt} if a.cmd == "set_power" else {}` men
         args = {"power_w": a.watt} if a.cmd in ("set_output", "set_power") else {}
 ```
 
-- [ ] **Step 8: Build dan verifikasi di bench**
+- [x] **Step 8: Build dan verifikasi di bench**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio run -e esp32c6 -t upload --upload-port COM3
@@ -753,7 +753,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/bess-sim" && uv run --with
 
 Harapan: ack `accepted` dengan `"cmd":"set_output"` dan `applied.power_pct` = 10. Ulangi dengan subcommand `set_power` — ack harus identik kecuali `"cmd":"set_power"`. Terakhir, kirim `enable` dengan `args.target` = 2 lewat skrip singkat mana pun; harapan `rejected` + `bad_value`.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess" && git add firmware/lib/bess_core/commands.h firmware/lib/bess_core/commands.cpp firmware/src/task_cmd.cpp firmware/test/test_native_payload/main.cpp bess-sim/tools/cloud_probe.py && git commit -m "feat(fw): set_output jadi nama resmi, set_power alias, target divalidasi
@@ -777,7 +777,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `Command` dari Task 5.
 - Produces: `bool planPowerPct(float power_w, float rated_w, float& pct, bool& clamped)` — `false` kalau `rated_w <= 0`; kalau `true`, `pct` sudah dipangkas ke `[-120, +120]` dan `clamped` menandakan pemangkasan benar-benar terjadi.
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [x] **Step 1: Tulis tes yang gagal**
 
 Sisipkan di `firmware/test/test_native_payload/main.cpp`, tepat sesudah tes dari Task 5:
 
@@ -819,7 +819,7 @@ Daftarkan keempatnya di `main()` tepat sesudah `RUN_TEST(test_parse_target_ekspl
     RUN_TEST(test_plan_power_rated_belum_diketahui);
 ```
 
-- [ ] **Step 2: Jalankan, pastikan gagal**
+- [x] **Step 2: Jalankan, pastikan gagal**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native -f test_native_payload
@@ -827,7 +827,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: error kompilasi `'planPowerPct' was not declared in this scope`.
 
-- [ ] **Step 3: Deklarasi dan implementasi**
+- [x] **Step 3: Deklarasi dan implementasi**
 
 Di `firmware/lib/bess_core/commands.h`, tambahkan tepat sebelum `#endif`:
 
@@ -855,7 +855,7 @@ bool planPowerPct(float power_w, float rated_w, float& pct, bool& clamped) {
 }
 ```
 
-- [ ] **Step 4: Jalankan seluruh suite, pastikan hijau**
+- [x] **Step 4: Jalankan seluruh suite, pastikan hijau**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native
@@ -863,7 +863,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: **32 test cases, 32 succeeded**.
 
-- [ ] **Step 5: Pakai di task_cmd**
+- [x] **Step 5: Pakai di task_cmd**
 
 Di `firmware/src/task_cmd.cpp`, ganti seluruh isi `doSetPower` menjadi:
 
@@ -899,7 +899,7 @@ static void doSetPower(const Command& c) {
 }
 ```
 
-- [ ] **Step 6: Build dan verifikasi di bench**
+- [x] **Step 6: Build dan verifikasi di bench**
 
 Flash, lalu kirim permintaan yang melampaui batas (70 kW pada BESS 50 kW). Harapan ack:
 
@@ -909,7 +909,7 @@ Flash, lalu kirim permintaan yang melampaui batas (70 kW pada BESS 50 kW). Harap
 
 Simulator harus benar-benar berjalan pada 60 kW, bukan 70 kW — periksa baris `RUN p_ac= +60.00 kW` di log simulator. Lalu kirim 5000 W dan pastikan hasilnya kembali `accepted` dengan `power_pct: 10`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess" && git add firmware/lib/bess_core/commands.h firmware/lib/bess_core/commands.cpp firmware/src/task_cmd.cpp firmware/test/test_native_payload/main.cpp && git commit -m "feat(fw): pangkas daya ke +-120% rated dengan hasil ack clamped
@@ -935,7 +935,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Penyimpangan dari spec §5 yang disengaja.** Spec menyebut "bentuk ack `queue_full`" sebagai salah satu tes native. Tes semacam itu **akan langsung hijau saat pertama ditulis** — `buildAckJson` sudah menerima `result`/`detail` apa pun dan bentuknya sudah dikunci `test_ack` yang ada. Tes yang tidak pernah bisa merah tidak membuktikan apa pun, jadi task ini diverifikasi di bench saja. Kalau pelaksana menemukan cara membuatnya benar-benar merah lebih dulu, silakan tambahkan.
 
-- [ ] **Step 1: Tambahkan antrean luapan**
+- [x] **Step 1: Tambahkan antrean luapan**
 
 Di `firmware/src/task_cmd.cpp`, ganti deklarasi antrean dan `taskCmdSubmit` menjadi:
 
@@ -957,7 +957,7 @@ void taskCmdSubmit(const char* json, size_t n) {
 }
 ```
 
-- [ ] **Step 2: Kuras slot luapan di task**
+- [x] **Step 2: Kuras slot luapan di task**
 
 Di `run()`, sisipkan tepat sesudah baris `if (xQueueReceive(q, &rc, portMAX_DELAY) != pdTRUE) continue;` — **sebelum** `Command c;`:
 
@@ -971,7 +971,7 @@ Di `run()`, sisipkan tepat sesudah baris `if (xQueueReceive(q, &rc, portMAX_DELA
         }
 ```
 
-- [ ] **Step 3: Buat antreannya**
+- [x] **Step 3: Buat antreannya**
 
 Di `taskCmdStart()`, sisipkan tepat sesudah `q = xQueueCreate(4, sizeof(RawCmd));`:
 
@@ -979,19 +979,19 @@ Di `taskCmdStart()`, sisipkan tepat sesudah `q = xQueueCreate(4, sizeof(RawCmd))
     q_luapan = xQueueCreate(1, sizeof(RawCmd));
 ```
 
-- [ ] **Step 4: Build**
+- [x] **Step 4: Build**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio run -e esp32c6 -t upload --upload-port COM3
 ```
 
-- [ ] **Step 5: Verifikasi di bench dengan membanjiri perintah**
+- [x] **Step 5: Verifikasi di bench dengan membanjiri perintah**
 
 Setiap `enable`/`disable` menahan task sampai 10 detik (menunggu bit status), jadi antrean 4-slot mudah dipenuhi. Kirim 7 perintah `enable` beruntun tanpa jeda dari satu skrip, lalu kumpulkan seluruh ack.
 
 Harapan: sebagian ack `accepted`/`rejected` biasa, dan **paling sedikit satu** ack `{"result":"rejected","detail":"queue_full"}` dengan `id` yang cocok dengan salah satu perintah yang dikirim. Yang membuktikan perbaikannya: **tidak ada perintah yang hilang tanpa jawaban** kecuali yang benar-benar melewati kapasitas slot luapan (dan yang itu muncul di log serial).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess" && git add firmware/src/task_cmd.cpp && git commit -m "feat(fw): balas queue_full alih-alih membuang perintah diam-diam
@@ -1015,7 +1015,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: —
 - Produces: `bool timeAfter(uint32_t now, uint32_t deadline)` — benar kalau `now` sudah mencapai/melewati `deadline`, aman terhadap rollover `millis()`.
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [x] **Step 1: Tulis tes yang gagal**
 
 Sisipkan di `firmware/test/test_native_payload/main.cpp` tepat sesudah tes Task 6, dan tambahkan `#include "timeutil.h"` di blok include atas:
 
@@ -1041,7 +1041,7 @@ Daftarkan di `main()` tepat sesudah `RUN_TEST(test_plan_power_rated_belum_diketa
     RUN_TEST(test_time_after_rollover);
 ```
 
-- [ ] **Step 2: Jalankan, pastikan gagal**
+- [x] **Step 2: Jalankan, pastikan gagal**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native -f test_native_payload
@@ -1049,7 +1049,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: error kompilasi `'timeAfter' was not declared in this scope`.
 
-- [ ] **Step 3: Implementasi**
+- [x] **Step 3: Implementasi**
 
 Di `firmware/lib/bess_core/timeutil.h`, tambahkan tepat sebelum `#endif`:
 
@@ -1067,7 +1067,7 @@ bool timeAfter(uint32_t now, uint32_t deadline) {
 }
 ```
 
-- [ ] **Step 4: Jalankan seluruh suite, pastikan hijau**
+- [x] **Step 4: Jalankan seluruh suite, pastikan hijau**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native
@@ -1075,7 +1075,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: **34 test cases, 34 succeeded**.
 
-- [ ] **Step 5: Pakai di wifi_mgr**
+- [x] **Step 5: Pakai di wifi_mgr**
 
 Di `firmware/src/wifi_mgr.cpp`, tambahkan `#include "timeutil.h"` di blok include atas, lalu ganti baris `if (now >= next_try_ms) {` menjadi:
 
@@ -1083,7 +1083,7 @@ Di `firmware/src/wifi_mgr.cpp`, tambahkan `#include "timeutil.h"` di blok includ
     if (timeAfter(now, next_try_ms)) {
 ```
 
-- [ ] **Step 6: Build dan pastikan WiFi tetap pulih normal**
+- [x] **Step 6: Build dan pastikan WiFi tetap pulih normal**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio run -e esp32c6 -t upload --upload-port COM3 && pio device monitor --port COM3 --baud 115200
@@ -1091,7 +1091,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: `[wifi] OK ...` muncul dalam 30 detik sesudah boot. Rollover-nya sendiri tidak bisa diamati di bench (butuh 49 hari) — itulah alasan perilakunya diuji native.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess" && git add firmware/lib/bess_core/timeutil.h firmware/lib/bess_core/timeutil.cpp firmware/src/wifi_mgr.cpp firmware/test/test_native_payload/main.cpp && git commit -m "fix(fw): wifiTick tahan rollover millis()
@@ -1114,7 +1114,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `mbReadRegs(..., uint8_t* exc)` dari `modbus_port.h`.
 - Produces: tidak ada perubahan tanda tangan.
 
-- [ ] **Step 1: Simpan status dan kode exception per blok**
+- [x] **Step 1: Simpan status dan kode exception per blok**
 
 Di `firmware/src/task_bess.cpp`, ganti seluruh isi `pollOnce` menjadi:
 
@@ -1157,19 +1157,19 @@ static void pollOnce(bool& ok) {
 
 Perhatikan perubahan perilaku yang disengaja: keempat blok sekarang **selalu** dibaca, tidak lagi terhenti di kegagalan pertama (`&&` menghubung-singkat). Ini menukar sedikit waktu bus saat BESS bermasalah dengan diagnosis yang lengkap — blok mana saja yang gagal, bukan hanya yang pertama.
 
-- [ ] **Step 2: Build**
+- [x] **Step 2: Build**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio run -e esp32c6 -t upload --upload-port COM3
 ```
 
-- [ ] **Step 3: Verifikasi di bench — matikan simulator**
+- [x] **Step 3: Verifikasi di bench — matikan simulator**
 
 Jalankan monitor serial, lalu hentikan proses simulator.
 
 Harapan: baris `[bess] blok telem: gagal (status ...)` untuk keempat blok, lalu `[bess] COMM_LOST ...` seperti biasa. Nyalakan lagi simulator dan pastikan kembali `[bess] OK` tanpa reboot.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess" && git add firmware/src/task_bess.cpp && git commit -m "feat(fw): catat kode exception Modbus per blok register
@@ -1193,7 +1193,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: seluruh perubahan Task 1–9.
 - Produces: dokumen kontrak MQTT yang cocok dengan firmware.
 
-- [ ] **Step 1: Perbarui tabel command di README**
+- [x] **Step 1: Perbarui tabel command di README**
 
 Di `firmware/README.md`, ganti baris tabel `set_power` menjadi dua baris:
 
@@ -1202,7 +1202,7 @@ Di `firmware/README.md`, ganti baris tabel `set_power` menjadi dua baris:
 | `set_power` | sama dengan `set_output` | Alias lama fase 1, perilaku identik | sama |
 ```
 
-- [ ] **Step 2: Perbarui bagian hasil ack di README**
+- [x] **Step 2: Perbarui bagian hasil ack di README**
 
 Ganti kalimat `` `result` selalu `"accepted"` atau `"rejected"`. `` menjadi:
 
@@ -1214,7 +1214,7 @@ selalu berisi nilai yang **benar-benar dipakai**, bukan yang diminta.
 
 Lalu tambahkan `queue_full` ke tabel alasan tolak yang ada, dengan keterangan: "antrean perintah penuh; perintah tidak dijalankan, silakan kirim ulang."
 
-- [ ] **Step 3: Dokumentasikan field telemetri baru di README**
+- [x] **Step 3: Dokumentasikan field telemetri baru di README**
 
 Di contoh payload telemetri, tambahkan dua baris tepat sesudah `"time_valid": true,`:
 
@@ -1232,7 +1232,7 @@ boot monotonik dari NVS. `boot_count` yang naik tanpa sebab yang diketahui = gat
 restart sendiri; itu sinyal, bukan derau.
 ```
 
-- [ ] **Step 4: Jalankan seluruh verifikasi otomatis**
+- [x] **Step 4: Jalankan seluruh verifikasi otomatis**
 
 ```bash
 cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="/c/Users/legio/bin:$PATH" && pio test -e native && pio run -e esp32c6
@@ -1240,7 +1240,7 @@ cd "D:/PT Bima Eco Power/embedded-system/gateway-bess/firmware" && export PATH="
 
 Harapan: **34 test cases, 34 succeeded** dan build SUCCESS dengan `Flash:` menyebut `from 1966080 bytes`.
 
-- [ ] **Step 5: Checklist bench dari kondisi dingin**
+- [x] **Step 5: Checklist bench dari kondisi dingin**
 
 Dengan simulator hidup dan gateway baru di-flash, buktikan berurutan dan catat keluaran verbatim:
 
@@ -1255,7 +1255,7 @@ Dengan simulator hidup dan gateway baru di-flash, buktikan berurutan dan catat k
 9. Simulator dimatikan → `[bess] blok ...` tercatat, lalu `COMM_LOST` dengan nilai lama dipertahankan.
 10. `boot_count` **tidak berubah** sepanjang seluruh checklist — kalau naik, ada reboot yang harus diselidiki sebelum fase ini dinyatakan selesai.
 
-- [ ] **Step 6: Centang rencana dan commit**
+- [x] **Step 6: Centang rencana dan commit**
 
 Centang seluruh checkbox di file rencana ini, lalu:
 
