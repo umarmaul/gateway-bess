@@ -11,12 +11,18 @@
 
 struct RawCmd { char json[512]; size_t len; };
 static QueueHandle_t q;
+static QueueHandle_t q_luapan;   // 1 slot: perintah yang ditolak karena antrean penuh
 
 void taskCmdSubmit(const char* json, size_t n) {
     RawCmd rc{};
     rc.len = min(n, sizeof(rc.json) - 1);
     memcpy(rc.json, json, rc.len);
-    xQueueSend(q, &rc, 0);
+    if (xQueueSend(q, &rc, 0) == pdTRUE) return;
+    // Antrean utama penuh. JSON tidak boleh di-parse di sini (ini task jaringan
+    // esp-mqtt), jadi payload mentah dititipkan ke slot luapan; task_cmd yang
+    // mem-parse id-nya dan membalas queue_full.
+    if (xQueueSend(q_luapan, &rc, 0) != pdTRUE)
+        Serial.println("[cmd] dibuang: antrean utama dan luapan penuh");
 }
 
 static uint32_t nowTs() { return (uint32_t)time(nullptr); }
@@ -96,6 +102,13 @@ static void run(void*) {
     RawCmd rc;
     for (;;) {
         if (xQueueReceive(q, &rc, portMAX_DELAY) != pdTRUE) continue;
+        // Kuras luapan lebih dulu supaya cloud mendapat jawaban secepat mungkin
+        RawCmd luapan;
+        while (xQueueReceive(q_luapan, &luapan, 0) == pdTRUE) {
+            Command lc;
+            parseCommand(luapan.json, luapan.len, lc);
+            sendAck(lc, "rejected", "queue_full");
+        }
         Command c;
         parseCommand(rc.json, rc.len, c);
         // BESS adalah node tunggal. Sebelumnya target diabaikan diam-diam,
@@ -117,5 +130,6 @@ static void run(void*) {
 
 void taskCmdStart() {
     q = xQueueCreate(4, sizeof(RawCmd));
+    q_luapan = xQueueCreate(1, sizeof(RawCmd));
     xTaskCreate(run, "task_cmd", 6144, nullptr, 2, nullptr);
 }
