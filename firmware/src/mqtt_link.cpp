@@ -22,11 +22,22 @@ static void onEvent(void*, esp_event_base_t, int32_t event_id, void* event_data)
             connected = false;
             Serial.println("[mqtt] disconnected");
             break;
-        case MQTT_EVENT_DATA:
-            if (e->topic_len == strlen(t_command) &&
+        case MQTT_EVENT_DATA: {
+            // esp-mqtt memotong pesan yang lebih besar dari buffer masuk.
+            // Potongan pertama BUKAN JSON utuh — memprosesnya menghasilkan
+            // ack bad_json yang menyesatkan. Hanya proses pesan lengkap.
+            bool utuh = e->current_data_offset == 0 &&
+                        e->data_len == e->total_data_len;
+            if (!utuh) {
+                Serial.printf("[mqtt] pesan terpotong diabaikan (%d/%d B)\n",
+                              e->data_len, e->total_data_len);
+                break;
+            }
+            if (e->topic_len == (int)strlen(t_command) &&
                 !strncmp(e->topic, t_command, e->topic_len))
                 taskCmdSubmit(e->data, e->data_len);
             break;
+        }
         default: break;
     }
 }
@@ -46,6 +57,8 @@ void mqttInit(const char* gw) {
     cfg.credentials.authentication.password = MQTT_PASSWD;
     cfg.session.keepalive = MQTT_KEEPALIVE_S;
     cfg.network.timeout_ms = MQTT_NETWORK_TIMEOUT_MS;
+    cfg.buffer.out_size = MQTT_WRITE_BUFFER;   // telemetri ~3,3 KB butuh margin
+    cfg.buffer.size = MQTT_READ_BUFFER;
     cfg.session.last_will.topic = t_status;
     cfg.session.last_will.msg = "offline";
     cfg.session.last_will.qos = 1;
@@ -64,5 +77,7 @@ bool mqttEnqueueTelemetry(const char* json, size_t n) {
 
 bool mqttPublishAck(const char* json, size_t n) {
     if (!cli || !connected) return false;
-    return esp_mqtt_client_publish(cli, t_ack, json, n, 1, 0) >= 0;
+    // enqueue, bukan publish: publish menulis soket di task pemanggil sambil
+    // memegang lock client — kalau TX tercekik, task_cmd ikut terblokir.
+    return esp_mqtt_client_enqueue(cli, t_ack, json, n, 1, 0, true) >= 0;
 }
