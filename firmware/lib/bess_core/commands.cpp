@@ -49,10 +49,14 @@ size_t buildAckJson(const Command& c, const char* result, const char* detail,
 
 bool planPowerPct(float power_w, float rated_w, float& pct, bool& clamped) {
     if (!(rated_w > 0.0f)) return false;     // juga menangkap NAN
-    float raw = power_w / rated_w * 100.0f;
+    if (isnan(power_w)) return false;        // NaN power_w tidak boleh lolos jadi pct NaN
+    // Hitung di presisi double: pembagian float saja membulatkan 60000/50000*100
+    // jadi ~120,00000763 (bukti float32), sehingga batas TEPAT 120% salah
+    // terpangkas oleh perbandingan ketat di bawah. Presisi double menghindarinya.
+    double raw_d = (double)power_w / (double)rated_w * 100.0;
     clamped = false;
-    if (raw > POWER_PCT_LIMIT) { raw = POWER_PCT_LIMIT; clamped = true; }
-    if (raw < -POWER_PCT_LIMIT) { raw = -POWER_PCT_LIMIT; clamped = true; }
-    pct = raw;
+    if (raw_d > (double)POWER_PCT_LIMIT) { raw_d = POWER_PCT_LIMIT; clamped = true; }
+    if (raw_d < -(double)POWER_PCT_LIMIT) { raw_d = -POWER_PCT_LIMIT; clamped = true; }
+    pct = (float)raw_d;
     return true;
 }

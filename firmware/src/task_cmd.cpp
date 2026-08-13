@@ -63,6 +63,7 @@ static void doOnOff(const Command& c, bool on) {
 
 static void doSetPower(const Command& c) {
     if (!c.has_power) { sendAck(c, "rejected", "bad_value"); return; }
+    if (isnan(c.power_w)) { sendAck(c, "rejected", "bad_value"); return; }
     stateLock();
     bool lost = g_state.bess.comm_lost;
     float rated_w = g_state.bess.rated_kw * 1000.0f;

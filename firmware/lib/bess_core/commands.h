@@ -29,8 +29,10 @@ size_t buildAckJson(const Command& c, const char* result, const char* detail,
 #define POWER_PCT_LIMIT 120.0f
 
 // Menghitung setpoint persen dari watt dan memangkasnya ke +-POWER_PCT_LIMIT.
-// Mengembalikan false kalau rated_w tidak valid (<= 0) — tidak ada acuan untuk
-// memangkas, jadi pemanggil harus menolak perintahnya.
+// Mengembalikan false kalau rated_w tidak valid (<= 0) atau power_w NaN —
+// kedua input diperiksa karena kontrak fungsi ini menjanjikan pct yang bisa
+// dipakai setiap kali ia mengembalikan true; pemanggil harus menolak
+// perintahnya kalau false.
 bool planPowerPct(float power_w, float rated_w, float& pct, bool& clamped);
 
 #endif

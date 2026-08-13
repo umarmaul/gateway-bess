@@ -229,6 +229,20 @@ static void test_plan_power_rated_belum_diketahui() {
     TEST_ASSERT_FALSE(planPowerPct(5000.0f, 0.0f, pct, clamped));
 }
 
+static void test_plan_power_nan_ditolak() {
+    float pct = 0; bool clamped = false;
+    // power_w NaN tidak boleh lolos jadi pct NaN yang berujung UB di lroundf
+    TEST_ASSERT_FALSE(planPowerPct(NAN, 50000.0f, pct, clamped));
+}
+
+static void test_plan_power_tepat_di_batas_bukan_clamp() {
+    float pct = 0; bool clamped = true;
+    // 60000/50000*100 = 120 persis; perbandingan ketat > / < jadi ini BUKAN clamp
+    TEST_ASSERT_TRUE(planPowerPct(60000.0f, 50000.0f, pct, clamped));
+    TEST_ASSERT_FLOAT_WITHIN(0.01, 120.0, pct);
+    TEST_ASSERT_FALSE(clamped);
+}
+
 static void test_parse_command_truncation() {
     Command c;
     // id lebih panjang dari 39 char (sizeof c.id = 40, jadi max 39 + NUL)
@@ -262,6 +276,8 @@ int main() {
     RUN_TEST(test_plan_power_dipangkas_atas);
     RUN_TEST(test_plan_power_dipangkas_bawah);
     RUN_TEST(test_plan_power_rated_belum_diketahui);
+    RUN_TEST(test_plan_power_nan_ditolak);
+    RUN_TEST(test_plan_power_tepat_di_batas_bukan_clamp);
     RUN_TEST(test_parse_unsupported_dan_bad_json);
     RUN_TEST(test_ack);
     RUN_TEST(test_telemetry_buffer_too_small);
