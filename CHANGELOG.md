@@ -93,6 +93,63 @@ yang tidak bisa diurai sama sekali (JSON rusak/field hilang) dipetakan ke
    `setup()`) → bootloader rollback otomatis ke image lama dalam beberapa
    detik (uji dengan hati-hati, siapkan jalur recovery SWD/USB kalau gagal).
 
+### Sub-proyek E (Provisioning)
+
+Menyusul G di rilis yang sama (spec §E). **Belum diuji di hardware** (bench
+tak terpasang) — verifikasi native test (10 test `prov_logic` + 1 test blok
+`data.network`) + build.
+
+**Kontrak cloud**: tidak ada topic/field MQTT baru selain `data.network`
+dapat dua field (`ap_active` bool, `mdns` string) — lihat
+`firmware/README.md` §Provisioning.
+
+**Deviasi dari pola tim** (sengaja, alasan keselamatan — lihat
+`lib/bess_core/prov_logic.h`): password AP fallback **wajib** 8-63 karakter
+(tim membolehkan kosong ATAU 8-63); endpoint `/api/wifi/save|ap|forget`
+wajib field `code` (gateway_code) — tim hanya mewajibkannya untuk OTA HTTP,
+gateway ini mewajibkannya untuk SEMUA endpoint yang mengubah konfigurasi
+karena mengendalikan konverter 50 kW.
+
+- `lib/bess_core/prov_logic.*`: validasi SSID/pass STA/pass AP/hostname
+  mDNS, parser IPv4 dotted-decimal, pembangkit `gateway_code` 6 char A-Z0-9
+  dari sumber acak yang disuntikkan, pembanding `code` waktu-konstan,
+  evaluasi status AP fallback (nyala saat STA putus, tetap 5 menit pasca
+  connect). Murni, 10 test native.
+- `src/prov.cpp`: NVS `device_id` (gateway_code, sekali dibangkitkan) +
+  `wifi_cfg` (ssid/pass/mdns/sta_static/IP statis/ap_ssid/ap_pass), fallback
+  ke `WIFI_SSID`/`WIFI_PASS` (secrets.h) kalau NVS kosong. SoftAP fallback
+  `WiFi.mode(WIFI_AP_STA)` + `DNSServer` captive; mDNS `bep-bess-gateway`
+  (retry 5 dtk). Tombol BOOT (GPIO9) 8 dtk → factory reset (`wifi_cfg` +
+  `app_cfg`, identitas dipertahankan).
+- `src/web.cpp`: `WebServer` sinkron port 80, `GET /wifi` + `POST
+  /api/wifi/{save,ap,forget}`, 404 saat AP aktif → redirect captive portal
+  ke `/wifi`. `webServer()` diekspos untuk sub-proyek F/H mendaftarkan rute
+  tambahan.
+- `src/wifi_mgr.cpp`: `wifiInit()` sekarang menerima kredensial dari
+  `prov.cpp` (dulu macro `WIFI_SSID`/`WIFI_PASS` langsung) + IP statis
+  opsional; backoff reconnect (`wifiTick`, satu-satunya driver) TIDAK
+  berubah. `data.network.ssid` kini SSID yang benar-benar dipakai
+  (`wifiSsid()`), bukan lagi macro tetap.
+- `config.h`: `PIN_BOOT_BUTTON` (GPIO9), timing AP/mDNS/factory-reset/reboot,
+  `AP_PASS` default `"bepgateway"` (`#ifndef`, timpa di `secrets.h`).
+
+**Verifikasi bench yang masih wajib** (checklist, belum dijalankan):
+1. Boot pertama tanpa `wifi_cfg` di NVS: SoftAP `BEP-CONNECT-<code>` menyala,
+   captive portal membuka `/wifi` otomatis (atau manual ke `192.168.4.1/wifi`).
+2. Isi form simpan WiFi dengan `code` benar → `200 restarting:true` → reboot →
+   gateway konek ke router; AP tetap menyala sampai 5 menit pasca connect
+   lalu mati sendiri.
+3. `code` salah/kosong di salah satu dari 3 endpoint → `403 forbidden`, NVS
+   tidak berubah.
+4. SSID/hostname/IP invalid → `400` dengan `error` yang sesuai, NVS tidak
+   berubah.
+5. Tahan tombol BOOT 8 detik saat berjalan → reboot ke SoftAP-only,
+   `gateway_code` di halaman `/wifi` TIDAK berubah dari sebelum reset.
+6. `http://bep-bess-gateway.local/wifi` bisa diakses dari perangkat lain di
+   LAN yang sama (mDNS).
+7. Field `ap_active`/`mdns` muncul benar di `data.network` telemetri saat AP
+   menyala vs mati.
+
 ## bess-0.2.0 — 23 September 2026
 
 ### Kontrak cloud (perlu tindakan di backend)

@@ -83,7 +83,9 @@ muncul sekali dan ringkasannya ikut telemetri sebagai `last_crash`:
 | `task_ota` (`task_ota.cpp`) | 2 | OTA gateway via MQTT (sub-proyek G) — lihat §OTA di bawah. **Tidak** didaftarkan ke task watchdog (`esp_ota_write` bisa lambat karena erase flash, dan menunggu `mqtt_tx` tidak boleh berujung reboot) |
 | `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Start client saat WiFi pertama naik, LWT `device/<gw>/status`, subscribe `device/<gw>/command` + `device/<gw>/ota/{manifest,chunk}`, panggil `otaOnMqttConnected()` tiap `MQTT_EVENT_CONNECTED` |
 | `mqtt_tx` (`mqtt_link.cpp`) | 1 | **Satu-satunya** pemanggil `esp_mqtt_client_enqueue` (QoS1). `loop()` menitip telemetri terbaru (latest wins); `task_cmd`/`task_ota` menitip pesan (`mqttPublish`) ke antrean generik 8 slot `{topic,retain,json}` (ack/ota_ack/ota_status) yang ditahan sampai MQTT terhubung (basi >10 menit dibuang; `retain` per pesan — status OTA retained, ack tidak). Sengaja **tidak** diawasi watchdog: dialah yang menanggung penantian lock esp-mqtt saat link tercekik |
-| `wifi_mgr` | — (dipanggil dari `loop()`) | Station WiFi, `country code "ID"`, reconnect exponential backoff (tidak blocking boot) |
+| `wifi_mgr` | — (dipanggil dari `loop()`) | Station WiFi, `country code "ID"`, reconnect exponential backoff (tidak blocking boot); kredensial disuntikkan `prov.cpp` |
+| `prov` (`prov.cpp`) | — (dipanggil dari `loop()`) | Provisioning (sub-proyek E) — lihat §Provisioning di bawah: gateway_code, SoftAP fallback + captive DNS, mDNS, tombol factory reset, reboot terjadwal |
+| `web` (`web.cpp`) | — (dipanggil dari `loop()`) | `WebServer` sinkron port 80: `/wifi` + `/api/wifi/*` (sub-proyek E); kerangka router untuk F/H |
 | `state.h` (`g_state`) | — | `BessData` + `seq` tunggal, dilindungi mutex (`stateLock`/`stateUnlock`) — dibaca `task_bess` (tulis) dan `loop()`/`task_cmd` (baca) |
 
 Arbitrase bus RS485 tunggal: hanya `task_bess` (poll) dan `task_cmd` (tulis
@@ -413,7 +415,95 @@ uv run --with paho-mqtt --with cryptography python tools/ota_publish.py \
 Belum diuji di hardware fisik (lihat `CHANGELOG.md` untuk checklist bench
 yang masih wajib sebelum dipakai di lapangan).
 
+## Provisioning (WiFi + captive portal)
+
+Sub-proyek E (spec `docs/superpowers/specs/2026-09-23-subproyek-EFGH-design.md`
+§E). Paritas pola dengan `BEPESP32_WiFi_Extension` (branch `gateway-mqtt`),
+**kecuali** satu penyimpangan sadar: password AP fallback **wajib** 8-63
+karakter (tim membolehkan kosong) -- lihat catatan keselamatan di
+`lib/bess_core/prov_logic.h`.
+
+### Alur operator (bench/lapangan baru, belum pernah di-provisioning)
+
+1. Nyalakan gateway. Tanpa kredensial router valid di NVS, **SoftAP fallback
+   selalu menyala**: SSID `BEP-CONNECT-<gateway_code>` (6 karakter A-Z0-9,
+   dibangkitkan sekali per perangkat, dipertahankan lintas reboot di NVS
+   `device_id`), password default `AP_PASS` (`bepgateway`, timpa di
+   `secrets.h` untuk lapangan -- lihat `secrets.example.h`).
+2. Sambungkan HP/laptop ke SSID itu. **Captive portal** (`DNSServer`)
+   biasanya membuka halaman provisioning otomatis; kalau tidak, buka
+   `http://192.168.4.1/wifi` manual.
+3. Halaman `/wifi` menampilkan status (SSID router, STA IP, AP SSID+status,
+   mDNS, **`gateway_code`** -- ditampilkan APA ADANYA karena halaman ini
+   hanya bisa diakses lewat AP yang sudah WPA2) + 3 form:
+   - **Simpan WiFi router** (`ssid`, `pass`, `mdns`, opsional IP statis) →
+     `POST /api/wifi/save`.
+   - **Ganti AP fallback** (`ap_ssid` opsional, `ap_pass` wajib 8-63 char) →
+     `POST /api/wifi/ap`.
+   - **Lupakan WiFi router** (hapus `ssid`+`pass` router, AP config tetap) →
+     `POST /api/wifi/forget`.
+4. Semua form **wajib** field `gateway_code` (field `code`) -- tanpa itu,
+   endpoint menolak `403 {"ok":false,"error":"forbidden"}` walau sudah di
+   dalam AP WPA2 (LAN/AP "trusted" saja tidak cukup untuk gateway yang
+   mengendalikan konverter 50 kW). Pembanding memakai waktu-konstan
+   (`provCodeEquals`, `lib/bess_core/prov_logic.cpp`).
+5. Sukses → `200 {"ok":true,"restarting":true}`, gateway reboot ~1 detik
+   kemudian (jeda ini supaya respons HTTP sempat terkirim -- **bukan** reboot
+   di dalam handler). Validasi gagal → `400 {"ok":false,"error":"<alasan>"}`
+   (`invalid_ssid`/`invalid_pass`/`invalid_mdns`/`invalid_ip`/`nvs_error`).
+6. Setelah reboot, gateway mencoba konek ke router yang baru disimpan.
+   SoftAP **tetap menyala** sampai STA benar-benar tersambung, lalu tetap
+   menyala **5 menit tambahan** (`PROV_AP_AFTER_CONNECT_MS`) sebelum mati --
+   jalur pemulihan kalau kredensial yang baru saja disimpan ternyata salah.
+
+### Di mana `gateway_code` terlihat
+
+- Halaman `/wifi` (satu-satunya tempat -- tidak dikirim lewat MQTT/telemetri).
+- Log serial USB-CDC saat boot (`[prov] gateway_code=... ap_ssid=... ...`).
+- NVS `device_id` key `gateway_code` (kalau perlu dibaca lewat BEP App/JTAG).
+
+### Factory reset
+
+Tombol **BOOT** (GPIO9, bawaan devkit, aktif LOW) ditahan **8 detik** saat
+gateway sedang berjalan → menghapus NVS `wifi_cfg` (kredensial router + AP
+override) dan `app_cfg` (nanti dipakai sub-proyek F), lalu reboot. **TIDAK**
+menyentuh `device_id` (`gateway_code` tetap sama), `mqtt_ota`, `boot`,
+`crash` -- identitas perangkat dan histori OTA/crash bertahan.
+
+### mDNS
+
+Default `bep-bess-gateway.local` (**beda** dari `bep-dev-gateway` milik
+gateway DCON tim -- dua gateway di satu LAN tidak bentrok nama), diiklankan
+`_http._tcp:80`, retry `MDNS.begin()` tiap 5 detik selama STA connected dan
+belum berhasil.
+
+### Penyimpanan NVS
+
+| Namespace | Key | Isi |
+|---|---|---|
+| `device_id` | `gateway_code` | 6 char A-Z0-9, sekali dibangkitkan, dipertahankan lintas factory reset |
+| `wifi_cfg` | `ssid`,`pass`,`mdns`,`sta_static`,`sta_ip`,`sta_gw`,`sta_mask`,`sta_dns1`,`sta_dns2`,`ap_ssid`,`ap_pass` | Kredensial router + IP statis opsional + override AP fallback -- dihapus oleh factory reset |
+
+### `data.network` (telemetri, field baru)
+
+```json
+"network": {"ssid": "...", "ip": "192.168.18.52", "rssi_dbm": -54, "ap_active": false, "mdns": "bep-bess-gateway"}
+```
+
+`ap_active` = SoftAP fallback sedang menyala. `mdns` = hostname yang sedang
+diiklankan (tanpa `.local`).
+
+### Kerangka web server (untuk F/H)
+
+`src/web.cpp` mendaftarkan `/wifi` + `/api/wifi/*` di atas `WebServer`
+sinkron biasa (`handleClient()` dari `loop()`, **harus cepat** -- `loop()`
+diawasi task watchdog 120 dtk, jangan tunggu lock esp-mqtt/Modbus lama).
+`webServer()` (`web.h`) mengekspos instance `WebServer&` supaya modul
+berikutnya (F: `/api/auto/config`; H: `/`, `/api/data`, `/api/command`,
+`/api/acks`, `/api/firmware_versions`) mendaftarkan rute tambahan tanpa
+membuat server sendiri.
+
 ## Non-scope fase ini
 
-Provisioning/captive portal, dashboard web lokal, auto-control SOC,
+Dashboard web lokal (H), auto-control SOC + jadwal (F),
 fault-history ring buffer, TLS 8883 produksi (bench pakai broker dev `1883` polos).
