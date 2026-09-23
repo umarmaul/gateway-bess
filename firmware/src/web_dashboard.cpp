@@ -371,11 +371,23 @@ a{color:var(--accent)}
   // /api/data tiap siklus (2 dtk), /api/acks tiap 5 siklus (~10 dtk),
   // /api/firmware_versions tiap 15 siklus (~30 dtk) -- semua SEKUENSIAL,
   // tak pernah dua request terbang bersamaan.
+  //
+  // TEMUAN REVIEW 23 Sep 2026 (UX): dulu /api/acks baru termuat di siklus
+  // ke-5 (~10 dtk) dan /api/firmware_versions di siklus ke-15 (~30 dtk) --
+  // tabel ack & info firmware kosong selama itu walau datanya sudah ada di
+  // gateway sejak boot. Sekarang KEDUANYA juga dimuat di siklus PERTAMA
+  // (cycle===1), selain jadwal periodiknya, tetap satu rantai sekuensial
+  // (tidak ada dua request terbang bersamaan). /api/auto/config (jadwal)
+  // juga dipindah ke rantai yang sama supaya sungguh-sungguh dimuat sekali
+  // di awal TANPA numpuk dengan fetchData() pertama (dulu loadSchedule()
+  // dipanggil terpisah, berbarengan dengan pollLoop() pertama).
   function pollLoop() {
     cycle++;
+    var firstCycle = cycle === 1;
     fetchData()
-      .then(function () { return (cycle % 5 === 0) ? fetchAcks() : null; })
-      .then(function () { return (cycle % 15 === 0) ? fetchFirmware() : null; })
+      .then(function () { return (firstCycle || cycle % 5 === 0) ? fetchAcks() : null; })
+      .then(function () { return (firstCycle || cycle % 15 === 0) ? fetchFirmware() : null; })
+      .then(function () { return firstCycle ? loadSchedule() : null; })
       .catch(function () {})
       .then(function () { setTimeout(pollLoop, POLL_MS); });
   }
@@ -392,14 +404,30 @@ a{color:var(--accent)}
   }
 
   function loadSchedule() {
-    fetchWithTimeout('/api/auto/config', { cache: 'no-store' }, FETCH_TIMEOUT_MS)
+    // return: dipanggil dari rantai pollLoop() (siklus pertama) yang perlu
+    // MENUNGGU fetch ini selesai sebelum menjadwalkan siklus berikutnya --
+    // tanpa `return` di sini, pollLoop() akan lanjut seketika dan berisiko
+    // dua request terbang bersamaan (lihat komentar di pollLoop()).
+    return fetchWithTimeout('/api/auto/config', { cache: 'no-store' }, FETCH_TIMEOUT_MS)
       .then(function (r) { return r.json(); })
       .then(applyScheduleToForm)
       .catch(function () {});
   }
 
+  // TEMUAN REVIEW 23 Sep 2026 (UX): tombol aksi (Enable/Disable/Set
+  // Output/Simpan jadwal) dulu langsung confirm()/kirim request walau
+  // field gateway_code masih kosong -- gagalnya baru terlihat setelah
+  // request balik 403 forbidden. Sekarang dicek DI SINI dulu, sebelum
+  // confirm() atau fetch apa pun.
+  function requireCode(resultElId) {
+    if (codeInput.value) return true;
+    setText(resultElId, 'Isi gateway_code dulu');
+    return false;
+  }
+
   qs('sched-reload').addEventListener('click', loadSchedule);
   qs('sched-save').addEventListener('click', function () {
+    if (!requireCode('sched-result')) return;
     var params = new URLSearchParams();
     params.append('enabled', qs('sched-enabled').checked ? '1' : '0');
     params.append('start', qs('sched-start').value);
@@ -441,6 +469,7 @@ a{color:var(--accent)}
   function showCmdResult(text) { setText('cmd-result', text); }
 
   qs('btn-enable').addEventListener('click', function () {
+    if (!requireCode('cmd-result')) return;
     if (!confirm('Yakin ENABLE BESS?')) return;
     showCmdResult('Mengirim enable...');
     sendCommand('enable')
@@ -449,6 +478,7 @@ a{color:var(--accent)}
   });
 
   qs('btn-disable').addEventListener('click', function () {
+    if (!requireCode('cmd-result')) return;
     if (!confirm('Yakin DISABLE BESS?')) return;
     showCmdResult('Mengirim disable...');
     sendCommand('disable')
@@ -457,6 +487,7 @@ a{color:var(--accent)}
   });
 
   qs('btn-setoutput').addEventListener('click', function () {
+    if (!requireCode('cmd-result')) return;
     var w = parseFloat(qs('power-w').value);
     if (isNaN(w)) { showCmdResult('Daya tidak valid'); return; }
     showCmdResult('Mengirim set_output...');
@@ -465,7 +496,10 @@ a{color:var(--accent)}
       .catch(function (e) { showCmdResult('set_output gagal: ' + e); });
   });
 
-  loadSchedule();
+  // loadSchedule() TIDAK dipanggil terpisah di sini lagi -- sudah bagian
+  // dari rantai pollLoop() siklus pertama (lihat komentar di pollLoop()),
+  // supaya benar-benar sekuensial dengan fetchData()/fetchAcks()/
+  // fetchFirmware() alih-alih terbang bersamaan dengan pollLoop() pertama.
   pollLoop();
 })();
 </script>
