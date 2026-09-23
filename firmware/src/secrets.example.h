@@ -11,3 +11,9 @@
 // bess-sim/tools/ota_publish.py --gen-key dev_key.pem`), timpa dengan base64
 // 32 byte kunci PUBLIK dev itu -- JANGAN commit private key ke mana pun:
 // #define OTA_ED25519_PUBKEY_B64 "isi-base64-32-byte-kunci-publik-dev"
+
+// Provisioning (sub-proyek E): TIDAK wajib didefinisikan di sini -- default
+// "bepgateway" (config.h, #ifndef) dipakai kalau tidak ditimpa. Untuk
+// perangkat lapangan, timpa dengan password AP fallback sendiri (8-63 char --
+// kosong DILARANG, lihat lib/bess_core/prov_logic.h):
+// #define AP_PASS "isi-password-ap-fallback-8-63-char"

@@ -10,7 +10,8 @@
 #include "mqtt_link.h"
 #include "task_cmd.h"
 #include "task_ota.h"
-#include "secrets.h"        // WIFI_SSID (dipakai di blok telemetri)
+#include "prov.h"
+#include "web.h"
 #include <Preferences.h>
 #include <esp_system.h>
 #include "reset_info.h"
@@ -73,11 +74,15 @@ void setup() {
     pinMode(PIN_LED_WIFI, OUTPUT);
     pinMode(PIN_LED_BESS, OUTPUT);
     stateInit();
-    wifiInit();
+    provInit();                 // sub-proyek E: gateway_code + wifi_cfg SEBELUM wifiInit()
+    ProvStaticIp sip = provStaticIp();
+    if (sip.enabled) wifiSetStaticIp(sip.ip, sip.gw, sip.mask, sip.dns1, sip.dns2);
+    wifiInit(provStaSsid(), provStaPass());
     configTime(0, 0, "pool.ntp.org", "time.google.com");
     Serial.println("[boot] gateway-bess " FW_VERSION);
     mbPortInit();
     taskBessStart();
+    webInit();                  // /wifi + /api/wifi/* (sub-proyek E)
 
     static char gw[13];
     wifiGw(gw);
@@ -91,6 +96,8 @@ void setup() {
 void loop() {
     esp_task_wdt_reset();
     wifiTick();
+    provTick();      // AP fallback + captive DNS + mDNS + tombol factory reset + reboot terjadwal
+    webTick();       // /wifi + /api/wifi/* (cepat -- lihat catatan watchdog di web.h)
     mqttTick(wifiConnected());
     digitalWrite(PIN_LED_WIFI, wifiConnected() ? HIGH : LOW);
     static uint32_t last = 0;
@@ -118,7 +125,9 @@ void loop() {
         si.uptime_ms = millis();
         si.ts = (uint32_t)time(nullptr);   // buildTelemetryJson yang menolkan
         si.rssi = WiFi.RSSI();
-        si.ssid = WIFI_SSID;
+        si.ssid = wifiSsid();
+        si.ap_active = provApActive();
+        si.mdns = provMdnsHostname();
         snprintf(si.ip, sizeof(si.ip), "%s", WiFi.localIP().toString().c_str());
         otaGetInfo(si.ota);
         stateLock();

@@ -61,3 +61,20 @@
 #ifndef OTA_ED25519_PUBKEY_B64
 #define OTA_ED25519_PUBKEY_B64 "X76lzB83YKaD9wf/qBa5eV5/Rnm1PIzRckIdgNkIC98="
 #endif
+
+// Provisioning (sub-proyek E). Logika murni (validasi/parse/gateway_code) ada
+// di lib/bess_core/prov_logic.h; konstanta di sini khusus ESP (pin, timing,
+// default yang bisa ditimpa secrets.h).
+#define PIN_BOOT_BUTTON            9        // tombol BOOT bawaan devkit, aktif LOW (INPUT_PULLUP)
+#define PROV_AP_AFTER_CONNECT_MS   (5UL * 60UL * 1000UL)  // AP fallback tetap menyala 5 menit pasca STA connect
+#define PROV_FACTORY_RESET_HOLD_MS 8000UL   // tahan tombol BOOT 8 dtk -> factory reset (wifi_cfg + app_cfg)
+#define PROV_MDNS_RETRY_MS         5000UL   // retry MDNS.begin() tiap ini selama STA connected & belum aktif
+#define PROV_MDNS_DEFAULT          "bep-bess-gateway"  // BEDA dari "bep-dev-gateway" milik tim -- dua gateway di
+                                                        // satu LAN akan bentrok nama kalau sama
+#define PROV_REBOOT_DELAY_MS       1000UL   // jeda sebelum reboot pasca simpan config (respons HTTP sempat terkirim)
+// Password AP fallback default -- SELALU ada nilai (lihat prov_logic.h: AP
+// tanpa password dilarang). Timpa di secrets.h untuk lapangan, jangan
+// pertahankan default ini di perangkat produksi.
+#ifndef AP_PASS
+#define AP_PASS                    "bepgateway"
+#endif
