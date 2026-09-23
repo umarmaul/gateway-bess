@@ -340,6 +340,39 @@ tangan yang sudah dibangun G. Dashboard hanya menampilkan status OTA.
 7. Kirim command lewat MQTT (bukan dashboard) → muncul juga di
    `GET /api/acks` (ring buffer bukan cuma untuk command dari web).
 
+### Perbaikan review (23 Sep 2026, pasca-implementasi E–H)
+
+Tetap `bess-0.3.0` (bukan versi baru). 144 test native lulus (33
+`sched_logic`, sisanya tak berubah); `pio run -e esp32c6` SUCCESS,
+flash 70,1%; 84 test pytest `bess-sim` tetap lulus (tak tersentuh).
+
+- **(TINGGI) Slowloris → reboot watchdog.** `handleClient()` dipindah dari
+  `loop()` ke task baru `task_web` (TIDAK diawasi task watchdog, pola sama
+  `task_ota`/`mqtt_tx`) — klien HTTP yang mengirim body sangat lambat dulu
+  bisa menahan `loop()` sampai panic `TASK_WDT`/reboot gateway. Diikuti
+  audit thread-safety: `prov.cpp` dapat mutex baru untuk state yang kini
+  disentuh `loop()` DAN `task_web` sekaligus (AP aktif/SSID/pass, hostname
+  mDNS, flag reboot terjadwal). Detail + residual risk: `firmware/README.md`
+  §Kerangka web server.
+- **(SEDANG) Command manual yang ditolak tetap mematikan jadwal.**
+  `schedNotifyManualOverride()` di `task_cmd.cpp` dipindah dari awal
+  `doOnOff`/`doSetPower` ke tepat sebelum tulisan Modbus pertama — command
+  manual yang ditolak (`comm_lost`/`bess_fault`/`bad_value`/`rated_unknown`)
+  sekarang tidak lagi ikut menonaktifkan jadwal.
+- **(RENDAH) Enable jadwal tak di-retry dalam window.** `sched_logic.*`
+  (`SchedMemo.pending_enable`): dulu kegagalan syarat (fault/comm_lost/SOC
+  di bawah recovery) tepat saat window mulai membuat jadwal menyerah
+  sampai window berikutnya. Sekarang dicoba lagi tiap siklus (~5 dtk)
+  selama masih di window yang sama; setelah enable berhasil sekali, tidak
+  di-retry lagi (operator tetap bisa mematikan manual di tengah window).
+- **(UX)** Tombol Enable/Disable/Set Output/Simpan jadwal di dashboard
+  sekarang menolak mengirim (tanpa `confirm()`) kalau `gateway_code`
+  kosong, dengan pesan "Isi gateway_code dulu".
+- **(UX)** `GET /api/acks`, `GET /api/firmware_versions`, dan
+  `GET /api/auto/config` sekarang dimuat di siklus polling PERTAMA (dulu
+  baru di siklus ke-5/ke-15, tabel kosong 10–30 dtk pertama), tetap
+  sekuensial (satu rantai, tak ada dua request terbang bersamaan).
+
 ## bess-0.2.0 — 23 September 2026
 
 ### Kontrak cloud (perlu tindakan di backend)
