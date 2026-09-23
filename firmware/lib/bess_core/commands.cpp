@@ -29,6 +29,39 @@ void parseCommand(const char* json, size_t len, Command& out) {
         JsonVariant p = doc["args"]["power_w"];
         out.has_power = !p.isNull();
         out.power_w = out.has_power ? p.as<float>() : 0.0f;
+    } else if (!strcmp(out.name, "set_schedule")) {
+        out.type = Command::SET_SCHEDULE;
+        JsonVariant args = doc["args"];
+        JsonVariant v;
+
+        v = args["enabled"];
+        if (!v.isNull()) { out.sched.has_enabled = true; out.sched.enabled = v.as<bool>(); }
+
+        v = args["start_hhmm"];
+        if (!v.isNull()) {
+            int m;
+            if (schedParseHHMM(v.as<const char*>(), m)) { out.sched.has_start = true; out.sched.start_min = m; }
+            else out.sched_bad_input = true;
+        }
+        v = args["end_hhmm"];
+        if (!v.isNull()) {
+            int m;
+            if (schedParseHHMM(v.as<const char*>(), m)) { out.sched.has_end = true; out.sched.end_min = m; }
+            else out.sched_bad_input = true;
+        }
+
+        v = args["soc_stop_pct"];
+        if (!v.isNull()) { out.sched.has_soc_stop = true; out.sched.soc_stop_pct = v.as<float>(); }
+        v = args["soc_recovery_pct"];
+        if (!v.isNull()) { out.sched.has_soc_recovery = true; out.sched.soc_recovery_pct = v.as<float>(); }
+        v = args["power_w"];
+        if (!v.isNull()) {
+            float pw = v.as<float>();
+            if (isnan(pw)) out.sched_bad_input = true;
+            else { out.sched.has_power = true; out.sched.power_w = pw; }
+        }
+        v = args["tz_offset_min"];
+        if (!v.isNull()) { out.sched.has_tz = true; out.sched.tz_offset_min = v.as<int>(); }
     } else out.type = Command::UNSUPPORTED;
 }
 

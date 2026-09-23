@@ -4,14 +4,24 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
+#include "sched_logic.h"
 
 struct Command {
-    enum Type { NONE, ENABLE, DISABLE, SET_POWER, UNSUPPORTED, BAD_JSON } type;
+    enum Type { NONE, ENABLE, DISABLE, SET_POWER, SET_SCHEDULE, UNSUPPORTED, BAD_JSON } type;
     char id[40];        // "" if not present
     char name[24];      // raw command name
     float power_w;      // only for SET_POWER
     bool has_power;     // whether power_w is valid
     uint32_t target;    // node tujuan; default 1 (BESS node tunggal)
+
+    // sub-proyek F: args `set_schedule` (target/power_w di atas tidak
+    // dipakai untuk command ini). sched_bad_input = true kalau start_hhmm
+    // atau end_hhmm dikirim tapi formatnya bukan "HH:MM" valid -- caller
+    // (task_cmd.cpp) menolak "bad_value" TANPA memanggil schedApplySetInput
+    // sama sekali, karena SchedSetInput.start_min/end_min di sini hanya
+    // berarti kalau sudah lolos schedParseHHMM (lihat sched_logic.h).
+    SchedSetInput sched;
+    bool sched_bad_input;
 };
 
 // Parses JSON command into Command struct
