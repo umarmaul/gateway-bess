@@ -10,6 +10,7 @@
 #include "state.h"
 #include "task_ota.h"
 #include "schedule.h"
+#include "ack_ring.h"
 #include <esp_task_wdt.h>
 
 // Seukuran buffer baca esp-mqtt: semua pesan yang lolos penjaga "pesan
@@ -50,12 +51,54 @@ static void submit(const char* json, size_t n, bool internal) {
 void taskCmdSubmit(const char* json, size_t n) { submit(json, n, false); }
 void taskCmdSubmitInternal(const char* json, size_t n) { submit(json, n, true); }
 
+// sub-proyek H: jalur submit KETIGA, aman dipanggil dari loop() (web_dashboard.cpp).
+// Buffer statis SENDIRI (rc_web) -- terpisah dari rc_ext (submit(), hanya aman
+// dari task esp-mqtt) dan rc_int (task_auto) supaya loop() tidak pernah
+// menimpa buffer yang sedang disalin xQueueSend dari task lain. TIDAK lewat
+// q_luapan (lihat task_cmd.h): antrean utama penuh -> false seketika, caller
+// HTTP membalas 503 sendiri.
+bool taskCmdSubmitWeb(const char* json, size_t n) {
+    static RawCmd rc_web;
+    rc_web.internal = false;   // command web = manual, seperti cloud (menonaktifkan jadwal)
+    rc_web.oversize = n > CMD_JSON_MAX;
+    rc_web.len = rc_web.oversize ? 0 : n;
+    memcpy(rc_web.json, json, rc_web.len);
+    rc_web.json[rc_web.len] = 0;
+    return xQueueSend(q, &rc_web, 0) == pdTRUE;
+}
+
+// sub-proyek H: ring buffer 8 ack terakhir untuk GET /api/acks. Ditulis dari
+// task_cmd sendiri (satu-satunya penulis, jadi push tak butuh lock ketat),
+// dibaca dari task lain (web_dashboard.cpp, lewat loop()) -- mutex melindungi
+// pembaca dari membaca struct yang sedang ditulis separuh jalan.
+static AckRing s_ack_ring;
+static SemaphoreHandle_t s_ack_mtx;
+
+static void ackRingPushLocked(const char* json, size_t n) {
+    if (!s_ack_mtx) return;
+    xSemaphoreTake(s_ack_mtx, portMAX_DELAY);
+    ackRingPush(s_ack_ring, json, n);
+    xSemaphoreGive(s_ack_mtx);
+}
+
+size_t taskCmdGetAcksJson(char* out, size_t cap) {
+    AckRing copy;
+    if (!s_ack_mtx) { ackRingInit(copy); }
+    else {
+        xSemaphoreTake(s_ack_mtx, portMAX_DELAY);
+        copy = s_ack_ring;
+        xSemaphoreGive(s_ack_mtx);
+    }
+    return ackRingBuildJson(copy, out, cap);
+}
+
 static uint32_t nowTs() { return (uint32_t)time(nullptr); }
 
 static void sendAck(const Command& c, const char* result, const char* detail,
                     float pct = NAN, float w = NAN) {
     static char buf[ACK_JSON_MAX];
     size_t n = buildAckJson(c, result, detail, pct, w, nowTs(), buf, sizeof(buf));
+    ackRingPushLocked(buf, n);
     bool sent = mqttPublishAck(buf, n);
     Serial.printf("[cmd] %s -> %s %s%s\n", c.name, result, detail,
                   sent ? "" : " (ack DIBUANG: antrean mqtt_tx penuh)");
@@ -68,6 +111,7 @@ static void sendScheduleAck(const Command& c, const char* result, const char* de
                              const SchedConfig& applied) {
     static char buf[ACK_JSON_MAX];
     size_t n = schedBuildAck(c.id, result, detail, applied, nowTs(), buf, sizeof(buf));
+    ackRingPushLocked(buf, n);
     bool sent = mqttPublishAck(buf, n);
     Serial.printf("[cmd] set_schedule -> %s %s%s\n", result, detail,
                   sent ? "" : " (ack DIBUANG: antrean mqtt_tx penuh)");
@@ -224,5 +268,7 @@ static void run(void*) {
 void taskCmdStart() {
     q = xQueueCreate(4, sizeof(RawCmd));
     q_luapan = xQueueCreate(1, sizeof(RawCmd));
+    s_ack_mtx = xSemaphoreCreateMutex();
+    ackRingInit(s_ack_ring);
     xTaskCreate(run, "task_cmd", 6144, nullptr, 2, nullptr);
 }

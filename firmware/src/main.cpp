@@ -14,6 +14,8 @@
 #include "prov.h"
 #include "schedule.h"
 #include "web.h"
+#include "web_dashboard.h"
+#include "sysinfo.h"
 #include <Preferences.h>
 #include <esp_system.h>
 #include "reset_info.h"
@@ -73,6 +75,11 @@ void setup() {
     if (esp_task_wdt_reconfigure(&wdt) != ESP_OK) esp_task_wdt_init(&wdt);
     esp_task_wdt_add(nullptr);          // setup() dan loop() = loopTask yang sama
     crashLogInit(g_boot_count, esp_reset_reason() == ESP_RST_TASK_WDT, g_crash);
+    // sub-proyek H: g_reset_reason/g_boot_count/g_crash sudah final di titik
+    // ini (hidup selama seluruh program -- buffer `static` di atas), jadi
+    // disimpan sekali untuk dipakai fillSysInfo() (telemetri MQTT DAN
+    // GET /api/data, lihat sysinfo.h) tanpa perlu meneruskannya berulang.
+    sysInfoInit(g_reset_reason, g_boot_count, g_crash);
     pinMode(PIN_LED_WIFI, OUTPUT);
     pinMode(PIN_LED_BESS, OUTPUT);
     stateInit();
@@ -86,6 +93,7 @@ void setup() {
     mbPortInit();
     taskBessStart();
     webInit();                  // /wifi + /api/wifi/* (sub-proyek E)
+    webDashboardInit();         // "/" + /api/data + /api/acks + /api/command + /api/firmware_versions (sub-proyek H)
 
     static char gw[13];
     wifiGw(gw);
@@ -118,23 +126,14 @@ void loop() {
         mqttConnected()) {
         last_telem = millis();
         static char json[TELEMETRY_JSON_MAX];
+        // fillSysInfo (src/sysinfo.cpp, sub-proyek H) -- SATU pengisi SysInfo
+        // dipakai di sini DAN GET /api/data (web_dashboard.cpp), supaya
+        // keduanya benar-benar satu kontrak (buildTelemetryJson yang sama).
+        // `seq` TIDAK diisi fillSysInfo() -- itu milik telemetri MQTT saja,
+        // makanya di-increment di sini, TEPAT di titik yang dulu juga
+        // melakukannya (lihat sysinfo.h).
         SysInfo si{};
-        wifiGw(si.gw);
-        si.fw_version = FW_VERSION;
-        si.last_reset_reason = g_reset_reason;
-        si.boot_count = g_boot_count;
-        si.free_heap = esp_get_free_heap_size();
-        si.min_free_heap = esp_get_minimum_free_heap_size();
-        si.crash = g_crash;
-        si.uptime_ms = millis();
-        si.ts = (uint32_t)time(nullptr);   // buildTelemetryJson yang menolkan
-        si.rssi = WiFi.RSSI();
-        si.ssid = wifiSsid();
-        si.ap_active = provApActive();
-        si.mdns = provMdnsHostname();
-        snprintf(si.ip, sizeof(si.ip), "%s", WiFi.localIP().toString().c_str());
-        otaGetInfo(si.ota);
-        autoGetInfo(si.auto_info);   // sub-proyek F: blok data.auto
+        fillSysInfo(si);
         stateLock();
         si.seq = ++g_state.seq;
         BessData snapshot = g_state.bess;
