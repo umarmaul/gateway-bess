@@ -63,7 +63,7 @@ MbStatus mbWrite6(uint8_t node, uint16_t id, uint16_t val, uint8_t* exc) {
     uint8_t req[8];
     size_t n = mbBuildWrite6(node, id, val, req);
     return doReq(req, n, [&](const uint8_t* r, size_t len) {
-        return mbParseEcho(r, len, node, 6, exc);
+        return mbParseEcho(r, len, node, 6, req, exc);
     });
 }
 
@@ -71,6 +71,6 @@ MbStatus mbWrite5(uint8_t node, uint16_t id, bool on, uint8_t* exc) {
     uint8_t req[8];
     size_t n = mbBuildWrite5(node, id, on, req);
     return doReq(req, n, [&](const uint8_t* r, size_t len) {
-        return mbParseEcho(r, len, node, 5, exc);
+        return mbParseEcho(r, len, node, 5, req, exc);
     });
 }

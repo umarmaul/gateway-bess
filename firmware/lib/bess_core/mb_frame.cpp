@@ -44,8 +44,13 @@ MbStatus mbParseReadResp(const uint8_t* r, size_t n, uint8_t node,
 }
 
 MbStatus mbParseEcho(const uint8_t* r, size_t n, uint8_t node,
-                     uint8_t fc, uint8_t* exc) {
+                     uint8_t fc, const uint8_t req[8], uint8_t* exc) {
     MbStatus st = preCheck(r, n, node, fc, exc);
     if (st != MB_OK) return st;
-    return (n == 8) ? MB_OK : MB_MALFORMED;
+    if (n != 8) return MB_MALFORMED;
+    // Alamat + nilai harus sama dengan yang dikirim: echo ber-CRC benar tapi
+    // untuk register/nilai lain bukan konfirmasi perintah kita.
+    for (int i = 2; i < 6; i++)
+        if (r[i] != req[i]) return MB_MALFORMED;
+    return MB_OK;
 }

@@ -54,13 +54,30 @@ static void test_parse_crc_salah() {
 }
 
 static void test_parse_echo_write() {
+    uint8_t req[8];
+    mbBuildWrite5(1, 5050, true, req);
     uint8_t resp[] = {0x01, 0x05, 0x13, 0xBA, 0xFF, 0x00, 0xA9, 0x5B};
     uint8_t exc = 0;
-    TEST_ASSERT_EQUAL(MB_OK, mbParseEcho(resp, 8, 1, 5, &exc));
+    TEST_ASSERT_EQUAL(MB_OK, mbParseEcho(resp, 8, 1, 5, req, &exc));
     uint8_t ex6[5] = {0x01, 0x86, 0x06};
     mbAppendCrc(ex6, 3);
-    TEST_ASSERT_EQUAL(MB_EXCEPTION, mbParseEcho(ex6, 5, 1, 6, &exc));
+    TEST_ASSERT_EQUAL(MB_EXCEPTION, mbParseEcho(ex6, 5, 1, 6, req, &exc));
     TEST_ASSERT_EQUAL(6, exc);
+}
+
+static void test_parse_echo_beda_dari_request_ditolak() {
+    // Echo sah FC5/FC6 = salinan persis request. Echo dengan CRC benar tapi
+    // alamat/nilai lain (mis. OFF dijawab untuk request ON) bukan konfirmasi.
+    uint8_t req_on[8];
+    mbBuildWrite5(1, 5050, true, req_on);
+    uint8_t resp_off[8];
+    mbBuildWrite5(1, 5050, false, resp_off);
+    uint8_t exc = 0;
+    TEST_ASSERT_EQUAL(MB_MALFORMED, mbParseEcho(resp_off, 8, 1, 5, req_on, &exc));
+    uint8_t req_p[8], resp_p[8];
+    mbBuildWrite6(1, 3050, 500, req_p);
+    mbBuildWrite6(1, 3051, 500, resp_p);      // alamat lain
+    TEST_ASSERT_EQUAL(MB_MALFORMED, mbParseEcho(resp_p, 8, 1, 6, req_p, &exc));
 }
 
 int main() {
@@ -72,5 +89,6 @@ int main() {
     RUN_TEST(test_parse_exception);
     RUN_TEST(test_parse_crc_salah);
     RUN_TEST(test_parse_echo_write);
+    RUN_TEST(test_parse_echo_beda_dari_request_ditolak);
     return UNITY_END();
 }

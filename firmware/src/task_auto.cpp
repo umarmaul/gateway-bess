@@ -91,10 +91,11 @@ static void run(void*) {
         switch (action) {
             case SchedAction::ENABLE_WITH_POWER:
                 Serial.printf("[auto] masuk window jadwal -- set_output %.1f W lalu enable\n", cfg.power_w);
-                // set_output DULU, baru enable: setpoint daya sudah terpasang
-                // saat BESS mulai berjalan (bukan menyala dulu di setpoint lama).
-                submitInternal("set_output", true, cfg.power_w);
-                submitInternal("enable", false, 0.0f);
+                // Satu command internal enable + power_w: task_cmd menulis daya
+                // DULU lalu enable, tanpa celah antrean (dulu dua command
+                // terpisah -- command lain bisa menyelip di antaranya). Setpoint
+                // sudah terpasang saat BESS mulai berjalan.
+                submitInternal("enable", true, cfg.power_w);
                 strncpy(last_action, "enable_with_power", sizeof(last_action) - 1);
                 last_action[sizeof(last_action) - 1] = 0;
                 last_action_ts = nowTs();

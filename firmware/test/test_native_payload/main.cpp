@@ -323,6 +323,20 @@ static void test_telemetry_auto_terisi() {
     TEST_ASSERT_EQUAL_UINT32(1785000005u, au["last_action_ts"].as<uint32_t>());
 }
 
+static void test_parse_enable_dengan_power_w() {
+    // Jadwal mengirim enable + power_w sebagai SATU command internal supaya
+    // tak ada command lain yang menyelip di antara tulis daya dan enable.
+    Command c;
+    const char* j = "{\"id\":\"auto-1\",\"cmd\":\"enable\",\"args\":{\"power_w\":20000}}";
+    parseCommand(j, strlen(j), c);
+    TEST_ASSERT_EQUAL(Command::ENABLE, c.type);
+    TEST_ASSERT_TRUE(c.has_power);
+    TEST_ASSERT_FLOAT_WITHIN(0.01, 20000.0f, c.power_w);
+    const char* j2 = "{\"cmd\":\"enable\"}";
+    parseCommand(j2, strlen(j2), c);
+    TEST_ASSERT_FALSE(c.has_power);
+}
+
 static void test_parse_enable() {
     Command c;
     const char* j = "{\"id\":\"a1\",\"cmd\":\"enable\",\"args\":{}}";
@@ -490,6 +504,7 @@ int main() {
     RUN_TEST(test_telemetry_auto_default_kosong);
     RUN_TEST(test_telemetry_auto_terisi);
     RUN_TEST(test_parse_enable);
+    RUN_TEST(test_parse_enable_dengan_power_w);
     RUN_TEST(test_parse_set_power);
     RUN_TEST(test_parse_set_output_nama_resmi);
     RUN_TEST(test_parse_target_default_satu);

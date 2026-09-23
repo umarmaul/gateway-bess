@@ -173,19 +173,20 @@ static void doOnOff(const Command& c, bool on, bool internal) {
     else sendAck(c, "timeout", "status_timeout");
 }
 
-static void doSetPower(const Command& c, bool internal) {
-    if (!c.has_power) { sendAck(c, "rejected", "bad_value"); return; }
-    if (isnan(c.power_w)) { sendAck(c, "rejected", "bad_value"); return; }
+// true = daya benar-benar terpasang (accepted/clamped, terbukti readback).
+static bool doSetPower(const Command& c, bool internal) {
+    if (!c.has_power) { sendAck(c, "rejected", "bad_value"); return false; }
+    if (isnan(c.power_w)) { sendAck(c, "rejected", "bad_value"); return false; }
     stateLock();
     bool lost = g_state.bess.comm_lost;
     float rated_w = g_state.bess.rated_kw * 1000.0f;
     stateUnlock();
-    if (lost) { sendAck(c, "rejected", "comm_lost"); return; }
+    if (lost) { sendAck(c, "rejected", "comm_lost"); return false; }
     float pct = 0.0f;
     bool clamped = false;
     if (!planPowerPct(c.power_w, rated_w, pct, clamped)) {
         sendAck(c, "rejected", "rated_unknown");   // 3146 belum pernah terbaca
-        return;
+        return false;
     }
     // Lihat komentar panjang di doOnOff -- dipindah ke sini (tepat sebelum
     // tulisan Modbus pertama) supaya command manual yang ditolak di atas
@@ -195,17 +196,18 @@ static void doSetPower(const Command& c, bool internal) {
     uint8_t exc = 0;
     if (mbWrite6(BESS_NODE, REG_P_SET, (uint16_t)raw, &exc) != MB_OK) {
         sendAck(c, "rejected", exc == 6 ? "bess_busy" : "bess_no_ack");
-        return;
+        return false;
     }
     uint16_t rb;
     if (mbReadRegs(BESS_NODE, REG_P_SET, 1, &rb, &exc) != MB_OK ||
         (int16_t)rb != raw) {
         sendAck(c, "rejected", "readback_mismatch");
-        return;
+        return false;
     }
     float applied_pct = raw / 10.0f;
     sendAck(c, clamped ? "clamped" : "accepted", "",
             applied_pct, applied_pct / 100.0f * rated_w);
+    return true;
 }
 
 static void doSetSchedule(const Command& c) {
@@ -264,7 +266,21 @@ static void run(void*) {
             continue;
         }
         switch (c.type) {
-            case Command::ENABLE:  doOnOff(c, true, rc.internal); break;
+            case Command::ENABLE:
+                // Jadwal mengirim enable+power_w sebagai SATU command internal:
+                // daya ditulis lalu enable dieksekusi berurutan di sini, tanpa
+                // celah bagi command lain menyelip di antrean (dulu dua command
+                // terpisah). Daya gagal terpasang -> jangan enable sama sekali.
+                // power_w pada enable dari cloud/web diabaikan (bukan kontrak).
+                if (rc.internal && c.has_power) {
+                    Command sp = c;
+                    sp.type = Command::SET_POWER;
+                    strncpy(sp.name, "set_output", sizeof(sp.name) - 1);
+                    sp.name[sizeof(sp.name) - 1] = 0;
+                    if (!doSetPower(sp, true)) break;
+                }
+                doOnOff(c, true, rc.internal);
+                break;
             case Command::DISABLE: doOnOff(c, false, rc.internal); break;
             case Command::SET_POWER: doSetPower(c, rc.internal); break;
             case Command::SET_SCHEDULE: doSetSchedule(c); break;

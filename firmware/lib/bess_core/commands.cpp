@@ -20,7 +20,15 @@ void parseCommand(const char* json, size_t len, Command& out) {
     scopy(out.id, sizeof(out.id), doc["id"] | "");
     scopy(out.name, sizeof(out.name), doc["cmd"] | "");
     out.target = doc["args"]["target"] | 1u;
-    if (!strcmp(out.name, "enable")) out.type = Command::ENABLE;
+    if (!strcmp(out.name, "enable")) {
+        out.type = Command::ENABLE;
+        // power_w opsional: dipakai HANYA oleh command internal jadwal
+        // (tulis daya lalu enable tanpa celah); task_cmd mengabaikannya
+        // untuk command dari cloud/web.
+        JsonVariant p = doc["args"]["power_w"];
+        out.has_power = !p.isNull();
+        out.power_w = out.has_power ? p.as<float>() : 0.0f;
+    }
     else if (!strcmp(out.name, "disable")) out.type = Command::DISABLE;
     else if (!strcmp(out.name, "set_output") || !strcmp(out.name, "set_power")) {
         // set_output = nama resmi (selaras BEPESP32_WiFi_Extension);

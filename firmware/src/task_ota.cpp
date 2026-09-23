@@ -5,6 +5,7 @@
 #include <string.h>
 #include <Preferences.h>
 #include <esp_ota_ops.h>
+#include <esp_task_wdt.h>
 #include <mbedtls/sha256.h>
 // secrets.h SEBELUM config.h: OTA_ED25519_PUBKEY_B64 dipertahankan #ifndef di
 // config.h -- kalau secrets.h (bench) mendefinisikannya duluan, default kunci
@@ -400,6 +401,13 @@ void taskOtaSubmitManifest(const char* json, size_t n) { submit(false, json, n);
 void taskOtaSubmitChunk(const char* json, size_t n) { submit(true, json, n); }
 
 static void run(void*) {
+    // Diawasi task watchdog (temuan audit 23 Sep 2026): selama job aktif,
+    // task_cmd menolak SEMUA command dengan ota_in_progress -- kalau task ini
+    // macet tanpa jaring pengaman, kendali jarak jauh BESS hilang sampai
+    // power-cycle. Operasi terpanjangnya (erase partisi di esp_ota_begin,
+    // <=1,9 MB, puluhan detik) masih jauh di bawah WDT_TIMEOUT_S=120 dtk; semua
+    // publish lewat antrean mqtt_tx (tak pernah menunggu lock esp-mqtt).
+    esp_task_wdt_add(nullptr);
     s_info_mtx = xSemaphoreCreateMutex();
     const esp_partition_t* running = esp_ota_get_running_partition();
     if (running) strncpy(s_running_label, running->label, sizeof(s_running_label) - 1);
@@ -408,6 +416,7 @@ static void run(void*) {
 
     RawOtaMsg m;
     for (;;) {
+        esp_task_wdt_reset();
         if (xQueueReceive(q_ota, &m, pdMS_TO_TICKS(2000)) == pdTRUE) {
             if (m.is_chunk) handleChunk(m.json, m.len);
             else handleManifest(m.json, m.len);

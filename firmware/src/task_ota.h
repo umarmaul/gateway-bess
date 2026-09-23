@@ -3,10 +3,11 @@
 #include "payload.h"   // OtaInfo
 
 // task_ota.h — OTA gateway via MQTT dengan tanda tangan Ed25519 (sub-proyek G).
-// Task ini SENGAJA TIDAK didaftarkan ke task watchdog: esp_ota_write() bisa
-// lambat (erase flash) dan menunggu MQTT (via mqttPublish, task mqtt_tx) tidak
-// boleh berujung reboot -- sama seperti task_cmd/loop yang tak pernah
-// menunggu lock esp-mqtt langsung.
+// Task ini DIAWASI task watchdog (WDT_TIMEOUT_S=120 dtk, sejak audit 23 Sep
+// 2026): selama job aktif semua command ditolak ota_in_progress, jadi task
+// yang macet tanpa jaring pengaman = kendali BESS hilang sampai power-cycle.
+// Operasi terlamanya (erase partisi di esp_ota_begin) puluhan detik, dan
+// publish lewat antrean mqtt_tx -- tak pernah menunggu lock esp-mqtt.
 void taskOtaStart(const char* gw);   // gw = MAC, dipakai sebagai gateway_id di status
 
 // Dipanggil dari event MQTT (task esp-mqtt) begitu pesan lengkap tiba di

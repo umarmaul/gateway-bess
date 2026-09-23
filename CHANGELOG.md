@@ -239,9 +239,10 @@ karena rated power device bisa saja belum pernah terbaca saat
    di atas `soc_recovery_pct` → tepat di edge masuk window, gateway
    `set_output` lalu `enable` sendiri (ack `id:"auto-<epoch>"` di
    `device/<gw>/command/ack`); tepat di edge keluar → `disable` sendiri.
-2. Set `fault` aktif (atau putus BMS/comm_lost) tepat sebelum edge masuk
-   window → gateway TIDAK enable, dan TIDAK retry walau fault hilang
-   sebelum window berakhir (baru dicoba lagi window berikutnya).
+2. Set `fault` aktif (atau comm_lost) tepat sebelum edge masuk window →
+   gateway TIDAK enable; begitu fault hilang dan SOC ≥ recovery MASIH di
+   dalam window yang sama, gateway enable sekali (retry dalam window,
+   lihat §Perbaikan review).
 3. Kirim `enable`/`disable`/`set_output` manual (MQTT atau `POST
    /api/command`) saat jadwal aktif → `data.auto.schedule_enabled` jadi
    `false` di telemetri berikutnya, jadwal tidak menyalakan/mematikan BESS
@@ -348,7 +349,7 @@ flash 70,1%; 84 test pytest `bess-sim` tetap lulus (tak tersentuh).
 
 - **(TINGGI) Slowloris → reboot watchdog.** `handleClient()` dipindah dari
   `loop()` ke task baru `task_web` (TIDAK diawasi task watchdog, pola sama
-  `task_ota`/`mqtt_tx`) — klien HTTP yang mengirim body sangat lambat dulu
+  `mqtt_tx`) — klien HTTP yang mengirim body sangat lambat dulu
   bisa menahan `loop()` sampai panic `TASK_WDT`/reboot gateway. Diikuti
   audit thread-safety: `prov.cpp` dapat mutex baru untuk state yang kini
   disentuh `loop()` DAN `task_web` sekaligus (AP aktif/SSID/pass, hostname
@@ -372,6 +373,26 @@ flash 70,1%; 84 test pytest `bess-sim` tetap lulus (tak tersentuh).
   `GET /api/auto/config` sekarang dimuat di siklus polling PERTAMA (dulu
   baru di siklus ke-5/ke-15, tabel kosong 10–30 dtk pertama), tetap
   sekuensial (satu rantai, tak ada dua request terbang bersamaan).
+
+### Perbaikan audit ulang (23 Sep 2026, setelah fetch semua repo)
+
+Tetap `bess-0.3.0`. Audit penuh firmware (bukan diff) menemukan 0 temuan
+tinggi; tiga perbaikan kecil. 146 test native lulus, flash 70,1%.
+
+- **(SEDANG) `task_ota` kini diawasi task watchdog.** Selama job OTA aktif
+  semua command ditolak `ota_in_progress` — task yang macet tanpa jaring
+  pengaman berarti kendali BESS hilang sampai power-cycle. Operasi
+  terlamanya (erase partisi) masih jauh di bawah 120 dtk.
+- **(RENDAH) Echo FC5/FC6 dicocokkan penuh dengan request**
+  (`mbParseEcho`): echo ber-CRC benar tapi untuk alamat/nilai lain tidak
+  lagi dianggap konfirmasi.
+- **(RENDAH) Enable jadwal jadi satu command internal** (`enable` +
+  `args.power_w`): dulu `set_output` dan `enable` diantrekan terpisah,
+  sehingga command cloud/web bisa menyelip di antaranya. Kini `task_cmd`
+  menulis daya lalu enable berurutan, dan tidak enable bila daya gagal
+  terpasang. Ack yang terlihat cloud tetap dua (`set_output` lalu
+  `enable`, id `auto-<epoch>` yang sama). `power_w` pada `enable` dari
+  cloud/web diabaikan — bukan bagian kontrak.
 
 ## bess-0.2.0 — 23 September 2026
 

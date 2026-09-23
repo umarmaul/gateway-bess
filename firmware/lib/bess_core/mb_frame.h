@@ -12,7 +12,8 @@ size_t mbBuildWrite5(uint8_t node, uint16_t id, bool on, uint8_t out[8]);
 // resp = frame lengkap; count = jumlah register yang diminta; exc diisi bila MB_EXCEPTION
 MbStatus mbParseReadResp(const uint8_t* resp, size_t n, uint8_t node,
                          uint16_t count, uint16_t* vals, uint8_t* exc);
+// req = frame 8 byte yang dikirim; echo sah FC5/FC6 wajib identik dengannya.
 MbStatus mbParseEcho(const uint8_t* resp, size_t n, uint8_t node,
-                     uint8_t fc, uint8_t* exc);
+                     uint8_t fc, const uint8_t req[8], uint8_t* exc);
 
 size_t mbExpectedReadLen(uint16_t count);   // 5 + 2*count

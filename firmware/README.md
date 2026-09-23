@@ -80,7 +80,7 @@ muncul sekali dan ringkasannya ikut telemetri sebagai `last_crash`:
 | `loop()` (Arduino) | 1 | Tick WiFi reconnect, LED status, kirim telemetri MQTT tiap `TELEMETRY_PERIOD_MS` (60 dtk) |
 | `task_bess` (`task_bess.cpp`) | 3 | Poll Modbus BESS tiap `POLL_PERIOD_MS` (1,5 dtk): telemetri `1050..1108` → alarm `2050..2057` → setpoint `3050` → param `3146..3184`; decode ke `BessData`; tandai `comm_lost` setelah `COMM_LOST_AFTER`=3 siklus gagal beruntun |
 | `task_cmd` (`task_cmd.cpp`) | 2 | Antrian command dari MQTT (`taskCmdSubmit`); eksekusi `enable`/`disable`/`set_output` (alias `set_power`) via Modbus, tunggu bukti nyata (bit status atau readback), kirim ack. Menolak semua command dengan `ota_in_progress` selama job OTA aktif |
-| `task_ota` (`task_ota.cpp`) | 2 | OTA gateway via MQTT (sub-proyek G) — lihat §OTA di bawah. **Tidak** didaftarkan ke task watchdog (`esp_ota_write` bisa lambat karena erase flash, dan menunggu `mqtt_tx` tidak boleh berujung reboot) |
+| `task_ota` (`task_ota.cpp`) | 2 | OTA gateway via MQTT (sub-proyek G) — lihat §OTA di bawah. **Diawasi** task watchdog (sejak audit 23 Sep 2026): selama job aktif semua command ditolak `ota_in_progress`, jadi task macet tanpa watchdog = kendali BESS hilang sampai power-cycle. Erase partisi di `esp_ota_begin` (puluhan detik) masih jauh di bawah 120 dtk; publish lewat `mqtt_tx`, tak pernah menunggu lock esp-mqtt |
 | `task_web` (`web.cpp`) | 1 | **Baru (temuan review 23 Sep 2026)**: `handleClient()` untuk SEMUA rute HTTP (E/F/H — `/wifi`, `/api/wifi/*`, `/api/auto/config`, `/`, `/api/data`, `/api/command`, `/api/acks`, `/api/firmware_versions`). **Tidak** didaftarkan ke task watchdog -- `WebServer::_parseRequest()` (library core) membaca body POST tanpa batas waktu total, klien "slowloris" (1 byte tiap <5 dtk) bisa menahannya lama. Lihat §Kerangka web server |
 | `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Start client saat WiFi pertama naik, LWT `device/<gw>/status`, subscribe `device/<gw>/command` + `device/<gw>/ota/{manifest,chunk}`, panggil `otaOnMqttConnected()` tiap `MQTT_EVENT_CONNECTED` |
 | `mqtt_tx` (`mqtt_link.cpp`) | 1 | **Satu-satunya** pemanggil `esp_mqtt_client_enqueue` (QoS1). `loop()` menitip telemetri terbaru (latest wins); `task_cmd`/`task_ota` menitip pesan (`mqttPublish`) ke antrean generik 8 slot `{topic,retain,json}` (ack/ota_ack/ota_status) yang ditahan sampai MQTT terhubung (basi >10 menit dibuang; `retain` per pesan — status OTA retained, ack tidak). Sengaja **tidak** diawasi watchdog: dialah yang menanggung penantian lock esp-mqtt saat link tercekik |
@@ -517,8 +517,8 @@ ada yang salah di jalur BESS/MQTT.
 
 Fix: `handleClient()` sekarang dipanggil dari task terpisah, **`task_web`**
 (`webTaskStart()`, prioritas 1), yang **SENGAJA TIDAK didaftarkan ke task
-watchdog** -- pola sama dengan `task_ota`/`mqtt_tx` (keduanya juga
-dikecualikan karena bisa menunggu lama di luar kendali kode kita). `loop()`
+watchdog** -- pola sama dengan `mqtt_tx` (juga dikecualikan karena bisa
+menunggu lama di luar kendali kode kita). `loop()`
 **tidak lagi** memanggil `webTick()`/`handleClient()` sama sekali.
 
 `-DHTTP_MAX_POST_WAIT=2000` **TIDAK** ditambahkan ke `build_flags` --
