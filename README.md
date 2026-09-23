@@ -69,6 +69,11 @@ status=0x....` tiap ±5 dtk, dan telemetri MQTT `device/<gw>/telemetry` tiap 60 
 (lihat `firmware/README.md` untuk kontrak lengkap dan `bess-sim/tools/cloud_probe.py`
 untuk mengirim command/melihat ack dari sisi "cloud").
 
+## Riwayat versi
+
+[`CHANGELOG.md`](CHANGELOG.md) — perubahan per versi firmware, termasuk perubahan
+kontrak yang harus diketahui tim cloud dan daftar verifikasi bench yang masih wajib.
+
 ## Spec & rencana
 
 - Fase 1 — desain (disetujui, per bagian A/B/C): [`docs/superpowers/specs/2026-08-09-gateway-bess-design.md`](docs/superpowers/specs/2026-08-09-gateway-bess-design.md)

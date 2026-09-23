@@ -29,12 +29,16 @@
 #define MQTT_WRITE_BUFFER      24576   // sama dengan BEPESP32_WiFi_Extension
 #define MQTT_READ_BUFFER       2048
 #define TELEMETRY_PERIOD_MS    60000
+#define TELEMETRY_JSON_MAX     8192    // buffer JSON telemetri (terukur ~3,5 KB)
+#define ACK_JSON_MAX           512
+#define ACK_QUEUE_LEN          8       // ack menunggu koneksi MQTT
+#define ACK_MAX_AGE_MS         600000  // ack tertahan >10 menit dibuang (basi)
 // Batas command masuk = buffer baca esp-mqtt. Pesan yang lebih besar sudah
 // dipotong esp-mqtt dan dibuang di mqtt_link, jadi RawCmd seukuran ini tidak
 // pernah memotong JSON lagi (dulu 512 B -> ack bad_json menyesatkan).
 #define CMD_JSON_MAX           MQTT_READ_BUFFER
-// Task watchdog. Harus > MQTT_NETWORK_TIMEOUT_MS: esp_mqtt_client_enqueue
-// menunggu lock client yang bisa dipegang task esp-mqtt selama satu tulisan
-// soket (<= network timeout) saat TX tercekik — itu lambat, bukan macet.
+// Task watchdog untuk loop/task_bess/task_cmd. Tak satu pun menunggu lock
+// esp-mqtt (semua kiriman lewat task mqtt_tx yang tidak diawasi), jadi batas
+// ini hanya perlu melampaui jalur terpanjang Modbus (~30 dtk) dengan margin.
 #define WDT_TIMEOUT_S          120
 #define FW_VERSION         "bess-0.2.0"

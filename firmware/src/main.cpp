@@ -68,7 +68,7 @@ void setup() {
     wdt.trigger_panic = true;
     if (esp_task_wdt_reconfigure(&wdt) != ESP_OK) esp_task_wdt_init(&wdt);
     esp_task_wdt_add(nullptr);          // setup() dan loop() = loopTask yang sama
-    crashLogInit(g_boot_count, g_crash);
+    crashLogInit(g_boot_count, esp_reset_reason() == ESP_RST_TASK_WDT, g_crash);
     pinMode(PIN_LED_WIFI, OUTPUT);
     pinMode(PIN_LED_BESS, OUTPUT);
     stateInit();
@@ -81,6 +81,7 @@ void setup() {
     static char gw[13];
     wifiGw(gw);
     Serial.printf("[boot] gw=%s\n", gw);
+    mqttTxStart();
     taskCmdStart();
     mqttInit(gw);
 }
@@ -103,7 +104,7 @@ void loop() {
     if (millis() - last_telem > TELEMETRY_PERIOD_MS && wifiConnected() &&
         mqttConnected()) {
         last_telem = millis();
-        static char json[8192];
+        static char json[TELEMETRY_JSON_MAX];
         SysInfo si{};
         wifiGw(si.gw);
         si.fw_version = FW_VERSION;
@@ -123,7 +124,7 @@ void loop() {
         stateUnlock();
         size_t n = buildTelemetryJson(si, snapshot, json, sizeof(json));
         if (n == 0) Serial.println("[mqtt] telemetri gagal dibangun (buffer kurang)");
-        else if (!mqttEnqueueTelemetry(json, n)) Serial.println("[mqtt] telemetri gagal masuk outbox");
+        else if (!mqttEnqueueTelemetry(json, n)) Serial.println("[mqtt] telemetri gagal dititip ke mqtt_tx");
     }
     delay(100);
 }

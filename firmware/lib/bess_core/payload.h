@@ -12,7 +12,13 @@ struct CrashInfo {
     uint32_t pc;              // program counter saat exception
     uint32_t mcause;          // penyebab trap RISC-V
     uint32_t boot_count;      // boot_count saat dump ditangkap (boot sesudah crash)
+    char wdt_tasks[48];       // crash TASK_WDT: task yang tak memberi makan WDT ("" = bukan)
 };
+
+// Tambah `name` ke daftar dipisah koma di `buf`. Kalau tak muat, nama itu
+// dibuang utuh (daftar tak pernah berisi nama terpotong). Aman dipanggil dari
+// ISR: tanpa alokasi, tanpa printf.
+void wdtTaskListAppend(char* buf, size_t cap, const char* name);
 
 struct SysInfo {
     char gw[13];              // MAC 12 hex + NUL

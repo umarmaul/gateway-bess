@@ -80,7 +80,8 @@ muncul sekali dan ringkasannya ikut telemetri sebagai `last_crash`:
 | `loop()` (Arduino) | 1 | Tick WiFi reconnect, LED status, kirim telemetri MQTT tiap `TELEMETRY_PERIOD_MS` (60 dtk) |
 | `task_bess` (`task_bess.cpp`) | 3 | Poll Modbus BESS tiap `POLL_PERIOD_MS` (1,5 dtk): telemetri `1050..1108` → alarm `2050..2057` → setpoint `3050` → param `3146..3184`; decode ke `BessData`; tandai `comm_lost` setelah `COMM_LOST_AFTER`=3 siklus gagal beruntun |
 | `task_cmd` (`task_cmd.cpp`) | 2 | Antrian command dari MQTT (`taskCmdSubmit`); eksekusi `enable`/`disable`/`set_output` (alias `set_power`) via Modbus, tunggu bukti nyata (bit status atau readback), kirim ack |
-| `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Connect + LWT `device/<gw>/status`, subscribe `device/<gw>/command`, publish telemetri & ack lewat `enqueue` (non-blocking, QoS1) |
+| `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Start client saat WiFi pertama naik, LWT `device/<gw>/status`, subscribe `device/<gw>/command` |
+| `mqtt_tx` (`mqtt_link.cpp`) | 1 | **Satu-satunya** pemanggil `esp_mqtt_client_enqueue` (QoS1). `loop()` menitip telemetri terbaru (latest wins), `task_cmd` menitip ack ke antrean 8 slot yang ditahan sampai MQTT terhubung (basi >10 menit dibuang). Sengaja **tidak** diawasi watchdog: dialah yang menanggung penantian lock esp-mqtt saat link tercekik |
 | `wifi_mgr` | — (dipanggil dari `loop()`) | Station WiFi, `country code "ID"`, reconnect exponential backoff (tidak blocking boot) |
 | `state.h` (`g_state`) | — | `BessData` + `seq` tunggal, dilindungi mutex (`stateLock`/`stateUnlock`) — dibaca `task_bess` (tulis) dan `loop()`/`task_cmd` (baca) |
 
@@ -164,16 +165,20 @@ titik terendahnya sejak boot. `min_free_heap_bytes` yang terus turun antar-telem
 **`last_crash`**: `null`, atau `{"task","pc","mcause","boot_count"}` dari coredump
 crash terakhir. Saat boot, coredump di flash diringkas ke NVS lalu dihapus, jadi
 nilainya bertahan lintas reboot sampai crash berikutnya menggantikannya; `boot_count`
-di dalamnya = boot pertama sesudah crash itu. `pc` (hex) dicocokkan ke kode dengan
+di dalamnya = boot pertama sesudah crash itu. Untuk crash watchdog ada field tambahan
+`wdt_tasks` (mis. `"task_cmd"`) — nama task yang tak memberi makan watchdog, ditangkap
+hook ISR watchdog ke RAM RTC; `task`/`pc` coredump pada kasus ini biasanya `IDLE`
+(task yang sedang jalan saat interrupt), jadi pakai `wdt_tasks` untuk mencari pelakunya. `pc` (hex) dicocokkan ke kode dengan
 `riscv32-esp-elf-addr2line -e .pio/build/esp32c6/firmware.elf <pc>` pada build yang
 sama; `mcause` = kode trap RISC-V. Ini yang dulu hilang pada reboot 13 Agustus.
 
 **Watchdog**: `loop()`, `task_bess`, dan `task_cmd` terdaftar di task watchdog
 (`WDT_TIMEOUT_S`=120 dtk, panic → reboot). Task yang macet lebih lama dari itu memicu
-reboot dengan `last_reset_reason:"TASK_WDT"`. Timeout sengaja jauh di atas
-`MQTT_NETWORK_TIMEOUT_MS` (60 dtk): saat link WiFi tercekik, `enqueue` bisa menunggu
-lock esp-mqtt selama satu tulisan soket — itu lambat, bukan macet, dan tak boleh
-memicu reboot.
+reboot dengan `last_reset_reason:"TASK_WDT"`, dan nama task yang macet ikut tercatat
+di `last_crash.wdt_tasks`. Ketiganya tidak pernah menunggu lock esp-mqtt — lock itu
+bisa tertahan >120 dtk saat link WiFi tercekik (tulisan parsial diulang, connect
+DNS+TCP+CONNACK) — karena semua kiriman lewat task `mqtt_tx` yang tidak diawasi.
+Link lambat = telemetri/ack tertunda, bukan reboot.
 
 **`comm_lost`**: begitu true, `active_power_kw`/`soc_percent`/dll **mempertahankan
 nilai terakhir yang diketahui** (bukan dipaksa nol) — flag `comm_lost` itu sendiri

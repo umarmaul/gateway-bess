@@ -43,11 +43,11 @@ static uint32_t nowTs() { return (uint32_t)time(nullptr); }
 
 static void sendAck(const Command& c, const char* result, const char* detail,
                     float pct = NAN, float w = NAN) {
-    static char buf[512];
+    static char buf[ACK_JSON_MAX];
     size_t n = buildAckJson(c, result, detail, pct, w, nowTs(), buf, sizeof(buf));
     bool sent = mqttPublishAck(buf, n);
     Serial.printf("[cmd] %s -> %s %s%s\n", c.name, result, detail,
-                  sent ? "" : " (ack gagal masuk outbox mqtt)");
+                  sent ? "" : " (ack DIBUANG: antrean mqtt_tx penuh)");
 }
 
 static bool waitStatusBit(int bit, bool want, uint32_t timeout_ms) {

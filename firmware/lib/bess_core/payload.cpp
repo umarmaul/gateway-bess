@@ -4,6 +4,17 @@
 #include "bess_decode.h"
 #include "timeutil.h"
 
+void wdtTaskListAppend(char* buf, size_t cap, const char* name) {
+    size_t len = 0, nlen = 0;
+    while (len < cap && buf[len]) len++;
+    while (name[nlen]) nlen++;
+    size_t sep = len ? 1 : 0;
+    if (len + sep + nlen + 1 > cap) return;
+    if (sep) buf[len++] = ',';
+    for (size_t i = 0; i < nlen; i++) buf[len++] = name[i];
+    buf[len] = 0;
+}
+
 size_t buildTelemetryJson(const SysInfo& s, const BessData& d, char* out, size_t cap) {
     JsonDocument doc;
     uint32_t ts = tsOrZero(s.ts);
@@ -30,6 +41,7 @@ size_t buildTelemetryJson(const SysInfo& s, const BessData& d, char* out, size_t
         c["pc"] = pc;                 // hex string: dicocokkan dgn addr2line/ELF
         c["mcause"] = s.crash.mcause;
         c["boot_count"] = s.crash.boot_count;
+        if (s.crash.wdt_tasks[0]) c["wdt_tasks"] = s.crash.wdt_tasks;
     } else {
         data["last_crash"] = nullptr;
     }

@@ -159,6 +159,32 @@ static void test_telemetry_last_crash_terisi() {
     TEST_ASSERT_EQUAL_STRING("0x42001234", c["pc"]);
     TEST_ASSERT_EQUAL(7, (int)c["mcause"]);
     TEST_ASSERT_EQUAL(41, (int)c["boot_count"]);
+    TEST_ASSERT_TRUE(c["wdt_tasks"].isNull());   // bukan crash watchdog
+}
+
+static void test_telemetry_last_crash_watchdog_menyebut_task_macet() {
+    // Coredump TASK_WDT merekam task yang sedang jalan (biasanya IDLE), bukan
+    // yang macet. Nama task yang tak memberi makan watchdog dilaporkan terpisah.
+    SysInfo s = sys_();
+    s.crash.present = true;
+    strcpy(s.crash.task, "IDLE");
+    strcpy(s.crash.wdt_tasks, "task_cmd,loopTask");
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_STRING("task_cmd,loopTask", doc["data"]["last_crash"]["wdt_tasks"]);
+}
+
+static void test_wdt_task_list_append() {
+    char buf[24] = "";
+    wdtTaskListAppend(buf, sizeof(buf), "task_cmd");
+    wdtTaskListAppend(buf, sizeof(buf), "loopTask");
+    TEST_ASSERT_EQUAL_STRING("task_cmd,loopTask", buf);
+    wdtTaskListAppend(buf, sizeof(buf), "task_bess");   // tak muat: dibuang utuh
+    TEST_ASSERT_EQUAL_STRING("task_cmd,loopTask", buf);
 }
 
 static void test_telemetry_heap() {
@@ -331,6 +357,8 @@ int main() {
     RUN_TEST(test_telemetry_heap);
     RUN_TEST(test_telemetry_last_crash_null_bila_tak_ada);
     RUN_TEST(test_telemetry_last_crash_terisi);
+    RUN_TEST(test_telemetry_last_crash_watchdog_menyebut_task_macet);
+    RUN_TEST(test_wdt_task_list_append);
     RUN_TEST(test_network_rssi_dbm);
     RUN_TEST(test_ts_nol_saat_ntp_belum_sinkron);
     RUN_TEST(test_ts_diteruskan_saat_ntp_sinkron);
