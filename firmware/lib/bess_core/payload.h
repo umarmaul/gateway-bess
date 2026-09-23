@@ -37,6 +37,8 @@ struct SysInfo {
     int rssi;
     const char* ssid;
     char ip[16];
+    bool ap_active;           // SoftAP fallback sedang menyala (sub-proyek E)
+    const char* mdns;         // hostname mDNS yang sedang diiklankan (mis. "bep-bess-gateway")
     const char* last_reset_reason;   // hasil resetReasonName(), mis. "PANIC"
     uint32_t boot_count;             // pencacah monotonik di NVS
     uint32_t free_heap;              // esp_get_free_heap_size() saat telemetri dibangun

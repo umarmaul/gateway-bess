@@ -20,6 +20,7 @@ static SysInfo sys_() {
     s.fw_version = "bess-0.1.0";
     s.uptime_ms = 123456; s.seq = 7; s.ts = 1785000000;
     s.rssi = -55; s.ssid = "Lantai 2"; strcpy(s.ip, "192.168.1.50");
+    s.ap_active = false; s.mdns = "bep-bess-gateway";
     return s;
 }
 
@@ -59,6 +60,31 @@ static void test_network_rssi_dbm() {
     JsonObject net = doc["data"]["network"];
     TEST_ASSERT_EQUAL(-55, (int)net["rssi_dbm"]);
     TEST_ASSERT_TRUE(net["rssi"].isNull());   // nama lama tidak boleh tersisa
+}
+
+static void test_network_ap_active_dan_mdns() {
+    // data.network.ap_active (sub-proyek E, provisioning): true selama SoftAP
+    // fallback menyala (STA putus, atau STA baru connect < 5 menit). mdns =
+    // hostname yang sedang diiklankan (default "bep-bess-gateway", bisa diganti
+    // operator lewat /api/wifi/save).
+    SysInfo s = sys_();
+    s.ap_active = true;
+    s.mdns = "bep-bess-gateway";
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    JsonObject net = doc["data"]["network"];
+    TEST_ASSERT_TRUE(net["ap_active"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("bep-bess-gateway", net["mdns"]);
+
+    s.ap_active = false;
+    n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    TEST_ASSERT_FALSE(doc["data"]["network"]["ap_active"].as<bool>());
 }
 
 static void test_ts_nol_saat_ntp_belum_sinkron() {
@@ -406,6 +432,7 @@ int main() {
     RUN_TEST(test_telemetry_last_crash_watchdog_menyebut_task_macet);
     RUN_TEST(test_wdt_task_list_append);
     RUN_TEST(test_network_rssi_dbm);
+    RUN_TEST(test_network_ap_active_dan_mdns);
     RUN_TEST(test_telemetry_ota_default_idle);
     RUN_TEST(test_telemetry_ota_downloading);
     RUN_TEST(test_telemetry_ota_pending_verify);
