@@ -97,14 +97,18 @@ fidelity") harus benar-benar mengikuti PDF protokol resmi, bukan sekadar cukup
 untuk lolos test — setiap penyimpangan dari device asli adalah bug simulator,
 bukan sesuatu yang "nanti disesuaikan di firmware".
 
-## Non-scope fase ini
+## Cakupan & non-scope
 
-Provisioning/captive portal, OTA (ESP maupun BESS), dashboard web lokal,
-auto-control berbasis SOC, fault-history ring buffer, TLS produksi (bench pakai
-broker dev `1883` tanpa TLS). Lihat keputusan D8 di spec desain. Sub-proyek
-berikutnya yang sudah teridentifikasi: E provisioning, F scheduling, G OTA,
-H dashboard. Prasyarat G (command >511 B terpotong diam-diam) sudah dibereskan
-di `bess-0.2.0` — batas command kini 2048 B (`CMD_JSON_MAX`).
+Sejak `bess-0.3.0`, sub-proyek **E** (provisioning SoftAP + captive portal),
+**F** (jadwal + auto-control SOC), **G** (OTA gateway via MQTT, Ed25519 +
+rollback), dan **H** (dashboard + API lokal) sudah diimplementasikan — lihat
+[`CHANGELOG.md`](CHANGELOG.md) dan spec
+[`2026-09-23-subproyek-EFGH-design.md`](docs/superpowers/specs/2026-09-23-subproyek-EFGH-design.md).
+Semuanya **belum diuji di hardware**; checklist bench per sub-proyek ada di CHANGELOG.
+
+Masih non-scope: ring buffer `fault_history`, TLS 8883 produksi (bench pakai broker
+dev `1883` tanpa TLS), dan OTA ke perangkat BESS itu sendiri (produk pihak ketiga,
+tak ada jalur flash lewat gateway — beda dari OTA proxy DCON di gateway-v2).
 
 ## Batasan
 

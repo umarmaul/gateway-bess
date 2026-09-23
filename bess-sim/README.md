@@ -193,7 +193,7 @@ simulator pun tidak boleh menambahkannya.
 ## Test
 
 ```bash
-uv run pytest -v       # 73 test: CRC (vektor persis PDF), register map,
+uv run pytest -v       # 84 test: CRC (vektor persis PDF), register map,
                         # fisika, state machine, alarm/skenario, transport, CLI
 uv run bess-sim selftest
 ```
