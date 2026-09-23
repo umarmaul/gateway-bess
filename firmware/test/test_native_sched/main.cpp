@@ -164,17 +164,27 @@ static void test_decide_siklus_normal() {
     TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
 }
 
-static void test_decide_fault_saat_edge_tidak_retry() {
+// TEMUAN REVIEW 23 Sep 2026 (RENDAH): dulu "gagal siap saat edge TIDAK
+// PERNAH di-retry sampai window berikutnya" -- sekarang di-retry tiap siklus
+// selama masih di window yang sama (`memo.pending_enable`), lihat
+// sched_logic.h. Nama test tetap merujuk kasus lama (fault saat edge) tapi
+// assersi diperbarui ke perilaku retry baru.
+static void test_decide_fault_saat_edge_lalu_retry_setelah_pulih() {
     SchedConfig c = windowCfg(1020, 1260);
     SchedMemo memo{};
     SchedInputs in{};
     in.soc_pct = 25.0f; in.comm_lost = false; in.running = false; in.active_power_kw = 0.0f;
 
-    in.ts = tsH(18); in.fault = true;      // edge masuk, tapi fault -> tidak enable
+    in.ts = tsH(18); in.fault = true;      // edge masuk, tapi fault -> belum enable, pending disimpan
     TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
     TEST_ASSERT_TRUE(memo.prev_in_window); // window tetap ditandai "sudah di dalam"
+    TEST_ASSERT_TRUE(memo.pending_enable);
 
-    in.ts = tsH(19); in.fault = false;     // fault hilang, TAPI bukan edge lagi -> tidak retry
+    in.ts = tsH(19); in.fault = false;     // fault hilang, bukan edge lagi TAPI pending -> DI-RETRY
+    TEST_ASSERT_TRUE(SchedAction::ENABLE_WITH_POWER == schedDecide(c, in, memo));
+    TEST_ASSERT_FALSE(memo.pending_enable);
+
+    in.ts = tsH(20);                       // sudah enable sekali di window ini -> TIDAK retry lagi
     TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
 
     in.ts = tsH(22);                       // keluar window -> disable (transisi berikutnya)
@@ -184,7 +194,7 @@ static void test_decide_fault_saat_edge_tidak_retry() {
     TEST_ASSERT_TRUE(SchedAction::ENABLE_WITH_POWER == schedDecide(c, in, memo));
 }
 
-static void test_decide_comm_lost_saat_edge_tidak_retry() {
+static void test_decide_comm_lost_saat_edge_lalu_retry_setelah_pulih() {
     SchedConfig c = windowCfg(1020, 1260);
     SchedMemo memo{};
     SchedInputs in{};
@@ -192,9 +202,110 @@ static void test_decide_comm_lost_saat_edge_tidak_retry() {
 
     in.ts = tsH(18); in.comm_lost = true;
     TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+    TEST_ASSERT_TRUE(memo.pending_enable);
 
-    in.ts = tsH(19); in.comm_lost = false;   // pulih, tapi bukan edge -> tetap tidak retry
+    in.ts = tsH(19); in.comm_lost = false;   // pulih, bukan edge, TAPI pending -> retry berhasil
+    TEST_ASSERT_TRUE(SchedAction::ENABLE_WITH_POWER == schedDecide(c, in, memo));
+
+    in.ts = tsH(20);                          // sudah enable -> tidak retry lagi
     TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+}
+
+// Retry berbasis SOC murni (bukan fault/comm_lost) -- SOC naik pelan-pelan
+// ke ambang recovery di dalam window yang sama.
+static void test_decide_retry_saat_soc_naik_ke_recovery_dalam_window() {
+    SchedConfig c = windowCfg(1020, 1260);   // soc_recovery_pct=20 (default helper)
+    SchedMemo memo{};
+    SchedInputs in{};
+    in.fault = false; in.comm_lost = false; in.running = false; in.active_power_kw = 0.0f;
+
+    in.ts = tsH(18); in.soc_pct = 15.0f;        // edge masuk, SOC di bawah recovery -> pending
+    TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+    TEST_ASSERT_TRUE(memo.pending_enable);
+
+    in.ts = tsH(18) + 1800; in.soc_pct = 18.0f;  // 30 menit kemudian, masih belum cukup
+    TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+    TEST_ASSERT_TRUE(memo.pending_enable);
+
+    in.ts = tsH(19); in.soc_pct = 20.0f;        // SOC cukup (>=recovery) -> retry berhasil
+    TEST_ASSERT_TRUE(SchedAction::ENABLE_WITH_POWER == schedDecide(c, in, memo));
+    TEST_ASSERT_FALSE(memo.pending_enable);
+}
+
+// Setelah enable pernah terjadi di window ini, jadwal TIDAK menyalakan ulang
+// -- operator boleh mematikan BESS manual di tengah window.
+static void test_decide_tidak_retry_setelah_enable_sekali_di_window() {
+    SchedConfig c = windowCfg(1020, 1260);
+    SchedMemo memo{};
+    SchedInputs in{};
+    in.soc_pct = 25.0f; in.fault = false; in.comm_lost = false; in.running = false; in.active_power_kw = 0.0f;
+
+    in.ts = tsH(18);   // edge masuk, langsung siap -> enable sekali
+    TEST_ASSERT_TRUE(SchedAction::ENABLE_WITH_POWER == schedDecide(c, in, memo));
+    TEST_ASSERT_FALSE(memo.pending_enable);
+
+    // "operator mematikan manual" tidak dimodelkan di level ini (schedDecide
+    // tidak tahu status ON/OFF BESS sebenarnya) -- yang diuji: TANPA edge
+    // baru dan TANPA pending, jadwal tidak pernah mengirim ENABLE lagi
+    // selama masih di window yang sama, berapa kali pun dievaluasi.
+    in.ts = tsH(19);
+    TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+    in.ts = tsH(20);
+    TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+}
+
+// Pending harus hilang tepat saat keluar window, walau tak pernah sempat
+// enable sama sekali di window itu.
+static void test_decide_pending_hilang_saat_keluar_window() {
+    SchedConfig c = windowCfg(1020, 1260);
+    SchedMemo memo{};
+    SchedInputs in{};
+    in.fault = false; in.comm_lost = false; in.running = false; in.active_power_kw = 0.0f;
+
+    in.ts = tsH(18); in.soc_pct = 5.0f;    // edge masuk, tak pernah siap -> pending disimpan
+    TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+    TEST_ASSERT_TRUE(memo.pending_enable);
+
+    in.ts = tsH(22); in.soc_pct = 5.0f;    // keluar window -> disable, pending DIHAPUS
+    TEST_ASSERT_TRUE(SchedAction::DISABLE == schedDecide(c, in, memo));
+    TEST_ASSERT_FALSE(memo.pending_enable);
+}
+
+// Pending harus hilang saat jadwal dinonaktifkan di tengah "menunggu siap".
+static void test_decide_pending_hilang_saat_jadwal_dinonaktifkan() {
+    SchedConfig c = windowCfg(1020, 1260);
+    SchedMemo memo{};
+    SchedInputs in{};
+    in.fault = false; in.comm_lost = false; in.running = false; in.active_power_kw = 0.0f;
+
+    in.ts = tsH(18); in.soc_pct = 5.0f;
+    TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+    TEST_ASSERT_TRUE(memo.pending_enable);
+
+    c.enabled = false;
+    TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+    TEST_ASSERT_FALSE(memo.pending_enable);
+    TEST_ASSERT_FALSE(memo.have_prev);
+}
+
+// Proteksi SOC disable-only yang memicu DISABLE juga menghapus pending.
+static void test_decide_proteksi_soc_menghapus_pending() {
+    SchedConfig c = windowCfg(1020, 1260);   // soc_stop_pct=10 (default helper)
+    SchedMemo memo{};
+    SchedInputs in{};
+    in.fault = false; in.comm_lost = false;
+
+    // Masuk window belum siap -- TANPA ekspor/running dulu supaya proteksi
+    // SOC tidak ikut memicu di tick ini (murni menguji jalur pending jadwal).
+    in.running = false; in.active_power_kw = 0.0f;
+    in.ts = tsH(18); in.soc_pct = 5.0f;
+    TEST_ASSERT_TRUE(SchedAction::NONE == schedDecide(c, in, memo));
+    TEST_ASSERT_TRUE(memo.pending_enable);
+
+    // Sekarang proteksi SOC memicu (running+exporting+soc rendah).
+    in.running = true; in.active_power_kw = 5.0f;
+    TEST_ASSERT_TRUE(SchedAction::DISABLE == schedDecide(c, in, memo));
+    TEST_ASSERT_FALSE(memo.pending_enable);
 }
 
 static void test_decide_jadwal_nonaktif_tidak_bertindak() {
@@ -422,8 +533,13 @@ int main() {
     RUN_TEST(test_in_window_start_sama_end_kosong);
     RUN_TEST(test_battery_ready);
     RUN_TEST(test_decide_siklus_normal);
-    RUN_TEST(test_decide_fault_saat_edge_tidak_retry);
-    RUN_TEST(test_decide_comm_lost_saat_edge_tidak_retry);
+    RUN_TEST(test_decide_fault_saat_edge_lalu_retry_setelah_pulih);
+    RUN_TEST(test_decide_comm_lost_saat_edge_lalu_retry_setelah_pulih);
+    RUN_TEST(test_decide_retry_saat_soc_naik_ke_recovery_dalam_window);
+    RUN_TEST(test_decide_tidak_retry_setelah_enable_sekali_di_window);
+    RUN_TEST(test_decide_pending_hilang_saat_keluar_window);
+    RUN_TEST(test_decide_pending_hilang_saat_jadwal_dinonaktifkan);
+    RUN_TEST(test_decide_proteksi_soc_menghapus_pending);
     RUN_TEST(test_decide_jadwal_nonaktif_tidak_bertindak);
     RUN_TEST(test_decide_waktu_belum_sinkron_tidak_bertindak_dan_memo_utuh);
     RUN_TEST(test_decide_proteksi_soc_disable_only);

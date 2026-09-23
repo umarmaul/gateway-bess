@@ -144,14 +144,20 @@ bool schedBatteryReady(const SchedConfig& cfg, const SchedInputs& in) {
 SchedAction schedDecide(const SchedConfig& cfg, const SchedInputs& in, SchedMemo& memo) {
     // (a) proteksi SOC disable-only -- SELALU dicek lebih dulu, terlepas
     // dari status jadwal/waktu. `running` mencegah disable berulang percuma
-    // kalau BESS sudah mati.
+    // kalau BESS sudah mati. Memicu DISABLE juga menghapus pending_enable
+    // (TEMUAN REVIEW 23 Sep 2026) -- kalau BESS baru saja dipaksa mati oleh
+    // proteksi SOC, jadwal tidak boleh langsung mencoba menyalakannya lagi
+    // di siklus berikutnya hanya karena masih "menunggu siap" dari sebelumnya.
     bool exporting = in.active_power_kw > 0.0f;
-    if (exporting && in.running && in.soc_pct <= cfg.soc_stop_pct)
+    if (exporting && in.running && in.soc_pct <= cfg.soc_stop_pct) {
+        memo.pending_enable = false;
         return SchedAction::DISABLE;
+    }
 
     // (b) jadwal -- hanya bertindak saat enabled DAN waktu tersinkron.
     if (!cfg.enabled) {
-        memo.have_prev = false;   // reset: reaktivasi nanti dievaluasi fresh
+        memo.have_prev = false;       // reset: reaktivasi nanti dievaluasi fresh
+        memo.pending_enable = false;
         return SchedAction::NONE;
     }
     if (in.ts == 0) return SchedAction::NONE;   // memo SENGAJA tidak disentuh -- lihat sched_logic.h
@@ -160,13 +166,31 @@ SchedAction schedDecide(const SchedConfig& cfg, const SchedInputs& in, SchedMemo
     SchedAction action = SchedAction::NONE;
     bool edge_in = win && !(memo.have_prev && memo.prev_in_window);
     bool edge_out = !win && memo.have_prev && memo.prev_in_window;
+    bool ready = schedBatteryReady(cfg, in);
     if (edge_in) {
-        if (schedBatteryReady(cfg, in))
+        if (ready) {
             action = SchedAction::ENABLE_WITH_POWER;
-        // gagal siap saat edge: TIDAK di-retry -- memo di bawah tetap
-        // ditandai "sudah di dalam window" walau aksinya NONE.
+            memo.pending_enable = false;
+        } else {
+            // Belum siap saat edge -- TEMUAN REVIEW 23 Sep 2026: ditandai
+            // pending, DICOBA LAGI tiap siklus (lihat cabang di bawah)
+            // selama masih di window yang sama, bukan menunggu window
+            // berikutnya.
+            memo.pending_enable = true;
+        }
     } else if (edge_out) {
         action = SchedAction::DISABLE;
+        memo.pending_enable = false;
+    } else if (win && memo.pending_enable) {
+        // Bukan edge, tapi masih di dalam window DAN belum pernah berhasil
+        // enable di window ini -- coba lagi. Begitu sudah pernah enable
+        // (pending_enable sudah false), cabang ini tidak pernah masuk lagi
+        // sampai window berikutnya -- operator boleh mematikan BESS manual
+        // di tengah window tanpa jadwal menyalakannya ulang.
+        if (ready) {
+            action = SchedAction::ENABLE_WITH_POWER;
+            memo.pending_enable = false;
+        }
     }
     memo.prev_in_window = win;
     memo.have_prev = true;

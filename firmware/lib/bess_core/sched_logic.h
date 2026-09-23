@@ -19,11 +19,19 @@
 //       soc<=soc_stop_pct dan sedang running -> disable.
 //   (b) Jadwal = instruksi eksplisit (bukan keputusan otonom "kapan boleh
 //       nyala sendiri"): hanya bertindak saat enabled DAN waktu tersinkron
-//       (ts!=0). Aksi terjadi SEKALI per transisi (edge masuk/keluar
-//       window), bukan tiap siklus evaluasi -- operator boleh mematikan di
-//       tengah window tanpa dinyalakan ulang terus-menerus, dan kegagalan
-//       syarat (fault/comm_lost/SOC rendah) saat edge masuk window TIDAK
-//       di-retry sampai window itu berakhir dan dimulai lagi.
+//       (ts!=0). ENABLE terjadi PALING BANYAK SEKALI per window (via
+//       `pending_enable`, lihat SchedMemo di bawah -- TEMUAN REVIEW 23 Sep
+//       2026, RENDAH, menggantikan perilaku lama "gagal siap saat edge TIDAK
+//       PERNAH di-retry sampai window berikutnya"): kalau syarat belum
+//       terpenuhi (fault/comm_lost/SOC di bawah recovery) tepat saat edge
+//       masuk window, keadaan itu ditandai PENDING dan DICOBA LAGI tiap
+//       siklus evaluasi SELAMA masih di dalam window yang sama -- begitu
+//       syarat terpenuhi, ENABLE_WITH_POWER terjadi sekali lalu pending
+//       dihapus. Operator yang mematikan BESS manual di tengah window
+//       (setelah enable pernah terjadi) TIDAK dinyalakan ulang oleh jadwal
+//       -- pending hanya aktif SEBELUM enable pertama window ini berhasil.
+//       DISABLE (keluar window, atau proteksi SOC (a) yang memicu) SELALU
+//       menghapus pending.
 
 struct SchedConfig {
     bool enabled;
@@ -118,26 +126,43 @@ enum class SchedAction { NONE, ENABLE_WITH_POWER, DISABLE };
 struct SchedMemo {
     bool have_prev = false;   // false = evaluasi pertama (atau baru saja di-reset, lihat di bawah)
     bool prev_in_window = false;
+    // true = sudah masuk window ini TAPI belum berhasil ENABLE_WITH_POWER
+    // (edge masuk terjadi saat belum siap) -- schedDecide mencoba lagi tiap
+    // siklus selama field ini true DAN masih di dalam window yang sama.
+    // Dihapus (false) oleh: ENABLE_WITH_POWER berhasil (baik langsung saat
+    // edge maupun lewat retry), edge keluar window, proteksi SOC (a) yang
+    // memicu DISABLE, atau jadwal dinonaktifkan.
+    bool pending_enable = false;
 };
 
 // Fungsi keputusan MURNI -- dipanggil tiap siklus (task_auto, ~5 dtk).
 // Urutan evaluasi (lihat komentar kebijakan (a)/(b) di atas struct):
 //  1. Proteksi SOC disable-only -- SELALU dicek lebih dulu, walau jadwal
-//     nonaktif atau waktu belum sinkron. Tidak menyentuh `memo`.
-//  2. Kalau jadwal nonaktif: `memo.have_prev` di-reset ke false (supaya
-//     saat jadwal diaktifkan lagi nanti, evaluasi berikutnya diperlakukan
-//     sebagai "pertama kali" -- window saat itu dievaluasi fresh, bukan
-//     dibandingkan ke status window dari sebelum jadwal dimatikan).
+//     nonaktif atau waktu belum sinkron. Kalau memicu DISABLE, juga
+//     menghapus `memo.pending_enable` (tidak menyentuh `have_prev`/
+//     `prev_in_window`).
+//  2. Kalau jadwal nonaktif: `memo.have_prev` DAN `memo.pending_enable`
+//     di-reset ke false (supaya saat jadwal diaktifkan lagi nanti, evaluasi
+//     berikutnya diperlakukan sebagai "pertama kali" -- window saat itu
+//     dievaluasi fresh, bukan dibandingkan ke status window dari sebelum
+//     jadwal dimatikan).
 //  3. Kalau waktu belum sinkron (ts==0): TIDAK bertindak sama sekali, DAN
-//     `memo` TIDAK disentuh (beda dari #2) -- supaya kalau waktu cuma
-//     sempat desync sebentar di tengah window, status "sedang di dalam
-//     window" tidak hilang dan tidak memicu enable ulang begitu waktu
-//     sinkron lagi.
-//  4. Evaluasi window + deteksi edge: masuk window (dan siap: SOC>=recovery,
-//     !fault, !comm_lost) -> ENABLE_WITH_POWER; keluar window -> DISABLE;
-//     selain edge -> NONE (termasuk kasus "gagal siap saat edge masuk" --
-//     TIDAK di-retry sampai transisi berikutnya, karena `memo` tetap
-//     diperbarui ke `win` walau aksinya NONE).
+//     `memo` TIDAK disentuh sama sekali (beda dari #2, termasuk
+//     `pending_enable`) -- supaya kalau waktu cuma sempat desync sebentar di
+//     tengah window, status "sedang di dalam window"/"masih menunggu siap"
+//     tidak hilang dan tidak memicu enable ulang begitu waktu sinkron lagi.
+//  4. Evaluasi window + deteksi edge:
+//     - edge masuk window: siap (SOC>=recovery, !fault, !comm_lost) ->
+//       ENABLE_WITH_POWER, `pending_enable`=false; belum siap -> NONE,
+//       `pending_enable`=true (dicoba lagi tiap siklus berikutnya).
+//     - edge keluar window -> DISABLE, `pending_enable`=false.
+//     - bukan edge, masih di dalam window, DAN `pending_enable` true ->
+//       coba lagi: siap -> ENABLE_WITH_POWER (`pending_enable`=false);
+//       belum siap -> NONE (`pending_enable` tetap true).
+//     - selain itu (termasuk sudah pernah ENABLE di window ini, sehingga
+//       `pending_enable` sudah false) -> NONE, TIDAK retry -- ini yang
+//       membuat operator boleh mematikan BESS di tengah window tanpa
+//       dinyalakan ulang oleh jadwal.
 SchedAction schedDecide(const SchedConfig& cfg, const SchedInputs& in, SchedMemo& memo);
 
 #endif
