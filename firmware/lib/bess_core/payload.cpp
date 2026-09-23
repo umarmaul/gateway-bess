@@ -19,6 +19,8 @@ size_t buildTelemetryJson(const SysInfo& s, const BessData& d, char* out, size_t
     data["time_valid"] = ts != 0;
     data["last_reset_reason"] = s.last_reset_reason ? s.last_reset_reason : "UNKNOWN";
     data["boot_count"] = s.boot_count;
+    data["free_heap_bytes"] = s.free_heap;
+    data["min_free_heap_bytes"] = s.min_free_heap;
     JsonObject net = data["network"].to<JsonObject>();
     net["ssid"] = s.ssid; net["ip"] = s.ip; net["rssi_dbm"] = s.rssi;
     JsonObject b = data["bess"].to<JsonObject>();

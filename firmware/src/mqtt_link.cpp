@@ -1,12 +1,15 @@
 #include "mqtt_link.h"
 #include <Arduino.h>
 #include <mqtt_client.h>
+#include <atomic>
 #include "config.h"
 #include "secrets.h"
 #include "task_cmd.h"
 
 static esp_mqtt_client_handle_t cli = nullptr;
-static bool connected = false;
+// Ditulis task esp-mqtt, dibaca loop() dan task_cmd — atomic supaya
+// compiler tidak men-cache nilainya di register lintas task.
+static std::atomic<bool> connected{false};
 static char t_telemetry[48], t_status[48], t_command[48], t_ack[52];
 
 static void onEvent(void*, esp_event_base_t, int32_t event_id, void* event_data) {
@@ -70,13 +73,16 @@ void mqttInit(const char* gw) {
 
 bool mqttConnected() { return connected; }
 
+// n == 0 berarti builder gagal (buffer kurang). esp-mqtt menafsirkan len 0
+// sebagai "hitung strlen sendiri", jadi tanpa penjaga ini isi buffer yang
+// tidak valid ikut terkirim. Tolak di sini untuk kedua jalur publish.
 bool mqttEnqueueTelemetry(const char* json, size_t n) {
-    if (!cli) return false;
+    if (!cli || n == 0) return false;
     return esp_mqtt_client_enqueue(cli, t_telemetry, json, n, 1, 0, true) >= 0;
 }
 
 bool mqttPublishAck(const char* json, size_t n) {
-    if (!cli || !connected) return false;
+    if (!cli || !connected || n == 0) return false;
     // enqueue, bukan publish: publish menulis soket di task pemanggil sambil
     // memegang lock client — kalau TX tercekik, task_cmd ikut terblokir.
     return esp_mqtt_client_enqueue(cli, t_ack, json, n, 1, 0, true) >= 0;

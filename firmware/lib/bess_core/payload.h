@@ -14,6 +14,8 @@ struct SysInfo {
     char ip[16];
     const char* last_reset_reason;   // hasil resetReasonName(), mis. "PANIC"
     uint32_t boot_count;             // pencacah monotonik di NVS
+    uint32_t free_heap;              // esp_get_free_heap_size() saat telemetri dibangun
+    uint32_t min_free_heap;          // low-water mark sejak boot
 };
 
 // Builds telemetry JSON per spec §6.1

@@ -126,6 +126,22 @@ static void test_telemetry_diagnostik_boot() {
     TEST_ASSERT_EQUAL(42, (int)doc["data"]["boot_count"]);
 }
 
+static void test_telemetry_heap() {
+    // Heap bebas + low-water mark ikut telemetri: kebocoran heap perlahan
+    // (penyebab klasik reboot tanpa jejak) terlihat dari cloud sebelum crash.
+    SysInfo s = sys_();
+    s.free_heap = 301234;
+    s.min_free_heap = 287000;
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL(301234, (int)doc["data"]["free_heap_bytes"]);
+    TEST_ASSERT_EQUAL(287000, (int)doc["data"]["min_free_heap_bytes"]);
+}
+
 static void test_parse_enable() {
     Command c;
     const char* j = "{\"id\":\"a1\",\"cmd\":\"enable\",\"args\":{}}";
@@ -277,6 +293,7 @@ int main() {
     RUN_TEST(test_telemetry_envelope);
     RUN_TEST(test_reset_reason_name);
     RUN_TEST(test_telemetry_diagnostik_boot);
+    RUN_TEST(test_telemetry_heap);
     RUN_TEST(test_network_rssi_dbm);
     RUN_TEST(test_ts_nol_saat_ntp_belum_sinkron);
     RUN_TEST(test_ts_diteruskan_saat_ntp_sinkron);

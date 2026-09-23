@@ -53,7 +53,7 @@ Log boot yang sehat:
 
 ```
 [boot] reset=POWERON boot_count=12 heap=371764 min_heap=366776
-[boot] gateway-bess bess-0.1.0
+[boot] gateway-bess bess-0.2.0
 [boot] gw=58E6C5218C78
 [wifi] OK rssi=-54 ip=192.168.18.52
 [mqtt] connected
@@ -109,12 +109,14 @@ yang baru.
   "data": {
     "device_type": "bess",
     "api_schema_version": 1,
-    "firmware_version": "bess-0.1.0",
+    "firmware_version": "bess-0.2.0",
     "device_id": "58E6C5218C78",
     "uptime_ms": 723004,
     "time_valid": true,
     "last_reset_reason": "POWERON",
     "boot_count": 12,
+    "free_heap_bytes": 301234,
+    "min_free_heap_bytes": 287000,
     "network": {"ssid": "...", "ip": "192.168.18.52", "rssi_dbm": -54},
     "bess": {
       "grid_voltage_ab_v": 398.2, "grid_voltage_bc_v": 397.9, "grid_voltage_ca_v": 398.5,
@@ -148,6 +150,17 @@ dibaca sebagai tahun 1970. Berlaku untuk `ts` di envelope maupun di ack, dan
 boot monotonik dari NVS. `boot_count` yang naik tanpa sebab yang diketahui = gateway
 restart sendiri; itu sinyal, bukan derau.
 
+**`free_heap_bytes` / `min_free_heap_bytes`**: heap bebas saat telemetri dibangun dan
+titik terendahnya sejak boot. `min_free_heap_bytes` yang terus turun antar-telemetri
+(pada `boot_count` yang sama) = kebocoran — terlihat dari cloud sebelum berakhir crash.
+
+**Watchdog**: `loop()`, `task_bess`, dan `task_cmd` terdaftar di task watchdog
+(`WDT_TIMEOUT_S`=120 dtk, panic → reboot). Task yang macet lebih lama dari itu memicu
+reboot dengan `last_reset_reason:"TASK_WDT"`. Timeout sengaja jauh di atas
+`MQTT_NETWORK_TIMEOUT_MS` (60 dtk): saat link WiFi tercekik, `enqueue` bisa menunggu
+lock esp-mqtt selama satu tulisan soket — itu lambat, bukan macet, dan tak boleh
+memicu reboot.
+
 **`comm_lost`**: begitu true, `active_power_kw`/`soc_percent`/dll **mempertahankan
 nilai terakhir yang diketahui** (bukan dipaksa nol) — flag `comm_lost` itu sendiri
 adalah sinyal kebenarannya, konsumen di cloud harus memeriksanya, bukan menyimpulkan
@@ -165,6 +178,9 @@ dari angka nol.
 Tanpa `dcon_code` — konsep itu khusus firmware DCON lama; BESS asli tidak
 memilikinya dan simulator wajib meniru device asli apa adanya (lihat D5 di spec
 desain). Pengaman pengganti: `enable` ditolak saat `fault` aktif atau `comm_lost`.
+`disable` **tidak** digerbang fault — di simulator, `disable` saat FAULT sekaligus
+me-reset fault bila penyebabnya sudah hilang (asumsi simulator, PDF tidak mengatur
+reset fault; verifikasi di device asli).
 
 ### Bentuk ack
 
@@ -172,9 +188,14 @@ desain). Pengaman pengganti: `enable` ditolak saat `fault` aktif atau `comm_lost
 {"id":"878f4bb6","cmd":"enable","result":"accepted","detail":"","applied":{},"ts":1786299831}
 ```
 
-`result` bernilai `"accepted"`, `"clamped"`, atau `"rejected"`. `"clamped"` berarti
-perintah dijalankan tetapi nilainya dipangkas ke batas device (±120% rated) — `applied`
-selalu berisi nilai yang **benar-benar dipakai**, bukan yang diminta.
+`result` bernilai `"accepted"`, `"clamped"`, `"rejected"`, atau `"timeout"`.
+`"clamped"` berarti perintah dijalankan tetapi nilainya dipangkas ke batas device
+(±120% rated) — `applied` selalu berisi nilai yang **benar-benar dipakai**, bukan yang
+diminta. `"timeout"` (hanya `enable`/`disable`, `detail:"status_timeout"`) berarti
+tulisan Modbus **sudah diterima device**, tetapi bit status bukti transisinya tidak
+muncul dalam 10 dtk — hasil akhirnya **tidak diketahui** (device mungkin masih
+berpindah state). Cloud jangan menganggapnya "tidak terjadi"; baca `running`/`standby`
+di telemetri berikutnya sebelum mengirim ulang.
 
 Alasan tolak (`detail`):
 
@@ -185,10 +206,12 @@ Alasan tolak (`detail`):
 | `bad_value` | `set_output`/`set_power` tanpa `power_w`, atau `args.target` selain `1` |
 | `comm_lost` | Modbus ke BESS sedang putus (≥3 poll gagal beruntun) — command tidak dicoba sama sekali |
 | `bess_fault` | `enable` ditolak karena BESS sedang dalam kondisi fault |
-| `bess_no_ack` | Tulisan Modbus gagal (timeout/exception non-busy) setelah retry, atau bukti transisi (bit status) tidak muncul dalam 10 dtk |
+| `bess_no_ack` | Tulisan Modbus gagal (timeout/exception non-busy) setelah retry, atau rated power (`3146`) belum pernah terbaca untuk `set_output` |
+| `status_timeout` | (dengan `result:"timeout"`) `enable`/`disable` tertulis, tapi bit Run/Shutdown tidak muncul dalam 10 dtk |
 | `bess_busy` | `set_output`/`set_power` ditolak dengan exception Modbus 06 (device sedang di tengah transisi state) |
 | `readback_mismatch` | `set_output`/`set_power` tertulis tapi nilai baca-balik dari register tidak cocok dengan yang ditulis |
 | `queue_full` | antrean perintah penuh; perintah tidak dijalankan, silakan kirim ulang |
+| `payload_too_large` | payload command > 2048 B (`CMD_JSON_MAX`); `id` di ack kosong karena pesan tak di-parse |
 
 `applied` kosong (`{}`) untuk `enable`/`disable`; untuk `set_output`/`set_power` sukses
 berisi `power_pct` (persen rated yang benar-benar tertulis) dan `power_w` (setara watt).

@@ -18,6 +18,7 @@
 #define REG_TELEM_COUNT    59
 #define REG_ALARM_START    2050
 #define REG_ALARM_COUNT    8
+#define REG_STATUS         2057    // word status (bit 6 Run, bit 11 Shutdown)
 #define REG_P_SET          3050
 #define REG_PARAM_START    3146
 #define REG_PARAM_COUNT    39      // 3146..3184 (rated .. soc)
@@ -28,4 +29,12 @@
 #define MQTT_WRITE_BUFFER      24576   // sama dengan BEPESP32_WiFi_Extension
 #define MQTT_READ_BUFFER       2048
 #define TELEMETRY_PERIOD_MS    60000
-#define FW_VERSION         "bess-0.1.0"
+// Batas command masuk = buffer baca esp-mqtt. Pesan yang lebih besar sudah
+// dipotong esp-mqtt dan dibuang di mqtt_link, jadi RawCmd seukuran ini tidak
+// pernah memotong JSON lagi (dulu 512 B -> ack bad_json menyesatkan).
+#define CMD_JSON_MAX           MQTT_READ_BUFFER
+// Task watchdog. Harus > MQTT_NETWORK_TIMEOUT_MS: esp_mqtt_client_enqueue
+// menunggu lock client yang bisa dipegang task esp-mqtt selama satu tulisan
+// soket (<= network timeout) saat TX tercekik — itu lambat, bukan macet.
+#define WDT_TIMEOUT_S          120
+#define FW_VERSION         "bess-0.2.0"

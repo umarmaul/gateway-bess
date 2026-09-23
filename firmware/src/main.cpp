@@ -13,6 +13,7 @@
 #include <Preferences.h>
 #include <esp_system.h>
 #include "reset_info.h"
+#include <esp_task_wdt.h>
 
 // Kalau ESP-IDF pernah menggeser nilai enum-nya, build gagal di sini —
 // bukan diam-diam salah label di telemetri lapangan. Mencakup SEMUA
@@ -54,6 +55,17 @@ void setup() {
                   g_reset_reason, g_boot_count,
                   (unsigned)esp_get_free_heap_size(),
                   (unsigned)esp_get_minimum_free_heap_size());
+    // TWDT bawaan core aktif (panic=1) tapi TIDAK mengawasi task apa pun —
+    // idle task tak didaftarkan dan tak ada task yang subscribe — sehingga
+    // task macet tidak pernah terdeteksi dan TASK_WDT mustahil muncul di
+    // last_reset_reason. Setel timeout longgar lalu daftarkan loop() di sini;
+    // task_bess dan task_cmd mendaftarkan dirinya sendiri.
+    esp_task_wdt_config_t wdt = {};
+    wdt.timeout_ms = WDT_TIMEOUT_S * 1000;
+    wdt.idle_core_mask = 0;
+    wdt.trigger_panic = true;
+    if (esp_task_wdt_reconfigure(&wdt) != ESP_OK) esp_task_wdt_init(&wdt);
+    esp_task_wdt_add(nullptr);          // setup() dan loop() = loopTask yang sama
     pinMode(PIN_LED_WIFI, OUTPUT);
     pinMode(PIN_LED_BESS, OUTPUT);
     stateInit();
@@ -71,6 +83,7 @@ void setup() {
 }
 
 void loop() {
+    esp_task_wdt_reset();
     wifiTick();
     digitalWrite(PIN_LED_WIFI, wifiConnected() ? HIGH : LOW);
     static uint32_t last = 0;
@@ -92,6 +105,8 @@ void loop() {
         si.fw_version = FW_VERSION;
         si.last_reset_reason = g_reset_reason;
         si.boot_count = g_boot_count;
+        si.free_heap = esp_get_free_heap_size();
+        si.min_free_heap = esp_get_minimum_free_heap_size();
         si.uptime_ms = millis();
         si.ts = (uint32_t)time(nullptr);   // buildTelemetryJson yang menolkan
         si.rssi = WiFi.RSSI();
@@ -102,7 +117,8 @@ void loop() {
         BessData snapshot = g_state.bess;
         stateUnlock();
         size_t n = buildTelemetryJson(si, snapshot, json, sizeof(json));
-        mqttEnqueueTelemetry(json, n);
+        if (n == 0) Serial.println("[mqtt] telemetri gagal dibangun (buffer kurang)");
+        else if (!mqttEnqueueTelemetry(json, n)) Serial.println("[mqtt] telemetri gagal masuk outbox");
     }
     delay(100);
 }

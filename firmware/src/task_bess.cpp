@@ -4,6 +4,7 @@
 #include "modbus_port.h"
 #include "bess_decode.h"
 #include "state.h"
+#include <esp_task_wdt.h>
 
 static void pollOnce(bool& ok) {
     uint16_t telem[REG_TELEM_COUNT], alst[REG_ALARM_COUNT], pset[1],
@@ -41,8 +42,10 @@ static void pollOnce(bool& ok) {
 }
 
 static void run(void*) {
+    esp_task_wdt_add(nullptr);
     int fail = 0;
     for (;;) {
+        esp_task_wdt_reset();
         bool ok = false;
         pollOnce(ok);
         if (ok) {
@@ -57,12 +60,14 @@ static void run(void*) {
         static uint32_t lastlog = 0;
         if (millis() - lastlog > 5000) {
             lastlog = millis();
+            // Salin dulu, cetak di luar lock: Serial.printf bisa memblokir
+            // (buffer USB-CDC penuh) dan tak boleh menahan mutex state.
             stateLock();
-            Serial.printf("[bess] %s p=%.1fkW soc=%.1f%% vdc=%.1fV status=0x%04X\n",
-                          g_state.bess.comm_lost ? "COMM_LOST" : "OK",
-                          g_state.bess.active_power_kw, g_state.bess.soc_pct,
-                          g_state.bess.dc_voltage_v, g_state.bess.status_raw);
+            BessData s = g_state.bess;
             stateUnlock();
+            Serial.printf("[bess] %s p=%.1fkW soc=%.1f%% vdc=%.1fV status=0x%04X\n",
+                          s.comm_lost ? "COMM_LOST" : "OK", s.active_power_kw,
+                          s.soc_pct, s.dc_voltage_v, s.status_raw);
         }
         vTaskDelay(pdMS_TO_TICKS(POLL_PERIOD_MS));
     }
