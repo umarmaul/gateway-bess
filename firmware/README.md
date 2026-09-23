@@ -493,15 +493,16 @@ belum berhasil.
 `ap_active` = SoftAP fallback sedang menyala. `mdns` = hostname yang sedang
 diiklankan (tanpa `.local`).
 
-### Kerangka web server (untuk F/H)
+### Kerangka web server (dipakai E/F/H)
 
 `src/web.cpp` mendaftarkan `/wifi` + `/api/wifi/*` (E) dan `/api/auto/config`
 (F) di atas `WebServer` sinkron biasa (`handleClient()` dari `loop()`,
 **harus cepat** -- `loop()` diawasi task watchdog 120 dtk, jangan tunggu lock
 esp-mqtt/Modbus lama). `webServer()` (`web.h`) mengekspos instance
-`WebServer&` supaya modul berikutnya (H: `/`, `/api/data`, `/api/command`,
-`/api/acks`, `/api/firmware_versions`) mendaftarkan rute tambahan tanpa
-membuat server sendiri.
+`WebServer&` supaya modul lain mendaftarkan rute tambahan tanpa membuat
+server sendiri -- `src/web_dashboard.cpp` (H) memakainya untuk `/`,
+`/api/data`, `/api/command`, `/api/acks`, `/api/firmware_versions` (lihat
+§Dashboard & API lokal di bawah).
 
 ## Jadwal + auto-control SOC
 
@@ -635,7 +636,161 @@ siklus `task_auto`, bukan cache basi). `last_action` = aksi jadwal terakhir
 yang benar-benar dieksekusi -- `"none"` (belum pernah), `"enable_with_power"`,
 atau `"disable"`; `last_action_ts` = 0 sampai aksi pertama terjadi.
 
+## Dashboard & API lokal
+
+Sub-proyek H (spec `docs/superpowers/specs/2026-09-23-subproyek-EFGH-design.md`
+§H). `src/web_dashboard.cpp` mendaftarkan rute tambahan di atas `WebServer`
+yang SAMA dengan E/F (`webServer()`, lihat §Kerangka web server di atas) --
+tidak ada server HTTP kedua.
+
+### Endpoint
+
+| Method | Path | Auth | Keterangan |
+|---|---|---|---|
+| `GET` | `/` | tidak | Dashboard satu halaman (HTML/CSS/JS inline PROGMEM, ~17 KB, tanpa CDN) |
+| `GET` | `/api/data` | tidak | JSON telemetri PERSIS sama builder dengan MQTT (`buildTelemetryJson`) -- `Cache-Control: no-store` |
+| `GET` | `/api/acks` | tidak | 8 ack command terakhir (ring buffer), terbaru dulu, array objek ack ASLI |
+| `POST` | `/api/command` | **ya** (`code`) | Body JSON command persis seperti MQTT -- lihat di bawah |
+| `GET`/`POST` | `/api/auto/config` | GET tidak, POST **ya** | Jadwal (sub-proyek F, lihat §Jadwal di atas) |
+| `GET` | `/api/firmware_versions` | tidak | `{firmware_version,running_partition,ota:{state,id,pending_verify}}` |
+| `GET`/`POST` | `/wifi`, `/api/wifi/*` | POST **ya** | Provisioning (sub-proyek E, lihat §Provisioning di atas) |
+
+Endpoint read-only (`GET /api/data`, `GET /api/acks`, `GET
+/api/firmware_versions`, `GET /api/auto/config`, `GET /wifi`) tidak
+memerlukan `code` -- tidak satu pun mengendalikan apa pun. Semua endpoint
+yang MENGUBAH state (`POST /api/command`, `POST /api/auto/config`, `POST
+/api/wifi/*`) wajib `code` (=`gateway_code`, lihat §Provisioning) --
+paritas dengan aturan keselamatan E/F: LAN "trusted" saja tak cukup untuk
+gateway yang mengendalikan konverter 50 kW.
+
+### `POST /api/command`
+
+Auth: `code` sebagai **query ATAU form arg** (`?code=<gateway_code>`) --
+**BUKAN** field `"code"` di body JSON (body dipakai murni sebagai command,
+identik dengan payload MQTT `device/<gw>/command`; satu bentuk auth
+konsisten dengan `/api/wifi/*` dan `/api/auto/config`). Tanpa `code` benar
+-> `403 {"ok":false,"error":"forbidden"}`.
+
+Body: JSON command persis seperti MQTT. `id` **opsional** -- kalau tidak
+dikirim (atau dikirim string kosong), gateway membangkitkan
+`"web-<millis>"` supaya tetap bisa dikorelasikan lewat `GET /api/acks`.
+
+```bash
+curl -X POST "http://<ip>/api/command?code=<gateway_code>" \
+  -H "Content-Type: application/json" \
+  -d '{"cmd":"enable"}'
+# -> 202 {"queued":true,"id":"web-123456"}
+
+curl -X POST "http://<ip>/api/command?code=<gateway_code>" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"op-1","cmd":"set_output","args":{"power_w":1500}}'
+# -> 202 {"queued":true,"id":"op-1"}
+```
+
+Balasan sinkron HANYA konfirmasi "masuk antrean" -- hasil eksekusi
+sebenarnya (`accepted`/`rejected`/`clamped`/`timeout` + `detail`) tetap
+lewat jalur ack yang SAMA dengan command MQTT (topic
+`device/<gw>/command/ack` + ring buffer `GET /api/acks`), karena eksekusi
+command (tulis Modbus, tunggu bukti status sampai 10 dtk) tidak boleh
+memblokir handler HTTP itu sendiri (`loop()` diawasi task watchdog 120
+dtk -- lihat catatan di `web.h`).
+
+Kode status:
+- `202` -- masuk antrean (`{"queued":true,"id":...}`). **Belum tentu**
+  `accepted` -- cek `GET /api/acks` atau `device/<gw>/command/ack`.
+- `400` -- body kosong (`empty_body`).
+- `403` -- `code` salah/kosong (`forbidden`).
+- `413` -- body > `CMD_JSON_MAX` (2048 B, batas yang sama dengan command
+  MQTT, lihat bess-0.2.0 di `../CHANGELOG.md`) (`payload_too_large`).
+- `503` -- antrean command penuh (`queue_full`), coba lagi sebentar lagi.
+  **Beda dari command MQTT**: command MQTT/jadwal yang datang saat antrean
+  penuh tetap mendapat ack `queue_full` lewat slot luapan 1-slot
+  (`task_cmd.cpp`); command web TIDAK memakai jalur itu -- HTTP `503` itu
+  sendiri sudah jadi jawaban sinkron, jadi command web tidak ikut
+  memperebutkan slot luapan yang dipakai command MQTT/jadwal.
+
+Command dari `/api/command` diperlakukan **manual** (seperti cloud) --
+**menonaktifkan jadwal** (`data.auto.schedule_enabled` -> `false`), sama
+seperti command MQTT (lihat §Jadwal di atas, "Command manual...
+menonaktifkan jadwal").
+
+### `GET /api/acks`
+
+```json
+[
+  {"id":"op-1","cmd":"set_output","result":"accepted","detail":"",
+   "applied":{"power_pct":15.0,"power_w":1500.0},"ts":1785000005},
+  {"id":"web-123456","cmd":"enable","result":"accepted","detail":"","applied":{},"ts":1785000001}
+]
+```
+
+Array kosong `[]` kalau belum pernah ada command sejak boot. Ring buffer 8
+slot (terbaru dulu) -- ack yang lebih lama tertimpa, **tidak persisted**
+(hilang saat reboot). Berisi ack DARI SEMUA sumber command (MQTT, jadwal
+otonom `id:"auto-<epoch>"`, dan `/api/command` sendiri), bukan cuma yang
+dikirim lewat dashboard.
+
+### `GET /api/firmware_versions`
+
+```json
+{"firmware_version":"bess-0.3.0","running_partition":"app0",
+ "ota":{"state":"idle","id":"","pending_verify":false}}
+```
+
+### `GET /api/data`
+
+Sama persis dengan payload telemetri MQTT (§Kontrak MQTT di atas),
+termasuk `data.auto` (F) dan `data.ota` (G) -- SATU builder
+(`buildTelemetryJson`, `lib/bess_core/payload.*`), SATU kontrak (diisi
+lewat `fillSysInfo()`, `src/sysinfo.cpp`, fungsi yang sama dipakai
+`main.cpp::loop()` untuk telemetri MQTT). Beda dari telemetri MQTT:
+- `seq` = nilai `g_state.seq` **SAAT INI, TANPA increment** (`seq` itu
+  milik telemetri MQTT, di-increment HANYA tiap kirim 60 dtk) -- jadi dua
+  panggilan `/api/data` berturut-turut bisa mengembalikan `seq` yang SAMA
+  kalau belum ada telemetri MQTT baru terkirim di antaranya.
+- Header `Cache-Control: no-store` (jangan pernah menampilkan data basi
+  dari cache browser/proxy).
+- Tidak dikirim ke MQTT -- murni untuk dashboard lokal ini dan alat bench
+  (`curl`, `bess-sim`).
+
+### Dashboard `GET /`
+
+Satu halaman HTML/CSS/JS inline (PROGMEM, ~17 KB, **TANPA CDN/font
+eksternal** -- gateway sering tanpa akses internet), responsif dari lebar
+360 px, mode gelap otomatis (`prefers-color-scheme`). Isi: status
+koneksi WiFi (SSID/RSSI/IP/AP fallback dari `data.network`) + "DATA BASI"
+kalau `data.bess.comm_lost` ATAU dua kali polling berturut-turut gagal
+(MQTT connect/disconnect TIDAK diekspos lewat kontrak telemetri --
+`buildTelemetryJson` sengaja tidak diubah untuk dashboard ini, lihat
+`../CHANGELOG.md` bess-0.3.0 §H), kartu BESS (daya aktif, SOC, tegangan
+DC, setpoint, status running/standby/fault/comm_lost), alarm aktif (hanya
+`alarms_decoded` bernilai 1), panel kontrol (Enable/Disable dengan
+`confirm()`, Set Output daya), panel jadwal (baca/tulis `/api/auto/config`),
+8 ack terakhir, info firmware/OTA/crash/heap, tautan ke `/wifi`.
+
+Poll `/api/data` tiap 2 dtk **berantai** (`fetch` -> tunggu
+selesai/timeout 4 dtk -> `setTimeout` 2 dtk berikutnya) -- **BUKAN**
+`setInterval`, supaya request tidak saling tumpang tindih di server
+1-koneksi (pelajaran gateway-v2, lihat `../CLAUDE.md` §"26 Juli --
+dashboard menghantam endpoint terberatnya sendiri"). `GET /api/acks`
+(~tiap 10 dtk) dan `GET /api/firmware_versions` (~tiap 30 dtk) dirantai
+ke siklus poll yang sama -- tidak pernah dua request terbang bersamaan.
+Semua teks dari JSON masuk DOM lewat `textContent` (tidak pernah
+`innerHTML`) -- nilai dari telemetri/ack (SSID, id command, dll) tidak
+bisa menyuntik markup. `gateway_code` di panel kontrol disimpan
+`sessionStorage` (dibungkus `try/catch` -- private browsing/quota bisa
+melempar).
+
+⚠️ **Penyimpangan dari spec: tidak ada upload OTA HTTP (`/update` milik
+tim)**. Alasan: satu-satunya jalur OTA gateway adalah MQTT bertanda tangan
+Ed25519 (sub-proyek G, lihat §OTA di atas) -- jalur `/update` HTTP polos
+di LAN tidak memverifikasi tanda tangan sama sekali, jadi menambahkannya
+berarti membuka jalur bypass persis di sebelah jalur bertanda tangan yang
+sudah susah payah dibangun G. Dashboard hanya **menampilkan** status OTA
+(`GET /api/firmware_versions`, blok `data.ota`) -- tidak bisa
+memicu/mengunggah OTA dari sini.
+
 ## Non-scope fase ini
 
-Dashboard web lokal (H), fault-history ring buffer, TLS 8883 produksi
-(bench pakai broker dev `1883` polos).
+Fault-history ring buffer (topic MQTT `device/<gw>/fault` terpisah), TLS
+8883 produksi (bench pakai broker dev `1883` polos).

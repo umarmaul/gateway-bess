@@ -258,6 +258,88 @@ karena rated power device bisa saja belum pernah terbaca saat
    WIB (`420`) → verifikasi edge masuk/keluar terjadi di jam LOKAL yang
    benar, bukan UTC.
 
+### Sub-proyek H (Dashboard + API lokal)
+
+Menyusul F di rilis yang sama (spec §H). **Belum diuji di hardware**
+(bench tak terpasang) — verifikasi native test (5 test `ack_ring` + 6 test
+`web_cmd`) + build ESP32 SUCCESS (flash 69,9%, naik dari 68,7% di F) + 84
+test pytest `bess-sim` (tak tersentuh, tetap lulus).
+
+**Kontrak cloud**: **tidak ada perubahan MQTT** — `GET /api/data` memakai
+`buildTelemetryJson` yang SAMA persis dengan telemetri MQTT (tidak ada
+field baru ditambahkan ke payload untuk kebutuhan dashboard), dan
+`POST /api/command` menerima body command JSON yang identik dengan
+`device/<gw>/command`. H murni menambah permukaan **HTTP lokal** (dashboard
+operator + endpoint bench `curl`) di atas kontrak yang sudah ada — tim
+cloud tidak perlu tindakan apa pun. Detail endpoint lengkap + contoh
+`curl` di `firmware/README.md` §Dashboard & API lokal.
+
+**Deviasi dari spec** (alasan di `firmware/README.md` §Dashboard `GET /`):
+tidak ada upload OTA HTTP (`/update` milik tim) — satu-satunya jalur OTA
+gateway tetap MQTT bertanda tangan Ed25519 (sub-proyek G); jalur HTTP
+polos di LAN tidak memverifikasi tanda tangan sama sekali, jadi
+menambahkannya berarti membuka jalur bypass di sebelah jalur bertanda
+tangan yang sudah dibangun G. Dashboard hanya menampilkan status OTA.
+
+- `lib/bess_core/ack_ring.*`: ring buffer 8 ack terakhir, murni
+  menggabungkan entri JSON yang sudah dibangun `buildAckJson`/
+  `schedBuildAck` (tanpa re-parse) jadi satu array `[terbaru,...,terlama]`.
+  5 test native (urutan, wrap-around, entri kepanjangan, buffer keluaran
+  kurang).
+- `lib/bess_core/web_cmd.*`: `webCmdEnsureId` membangkitkan id
+  `"web-<millis>"` untuk command `/api/command` yang tidak mengirim `id`
+  (atau mengirim string kosong) — supaya ack-nya tetap bisa dikorelasikan
+  lewat `GET /api/acks`, sama seperti command MQTT yang selalu punya `id`.
+  Body bukan objek JSON valid → gagal jujur, diteruskan APA ADANYA ke
+  `task_cmd` (satu kontrak kegagalan `bad_json`/`unsupported_cmd` dengan
+  command MQTT yang korup, bukan dua jalur berbeda). 6 test native.
+- `src/sysinfo.*` (baru): `fillSysInfo()` — SysInfo yang dulu diisi inline
+  di `main.cpp::loop()` sekarang satu fungsi dipakai telemetri MQTT DAN
+  `GET /api/data`. `seq` SENGAJA tidak diisi di sini (tetap milik
+  telemetri MQTT, di-increment hanya di `loop()`); `/api/data` memakai
+  `g_state.seq` saat ini tanpa increment.
+- `src/task_cmd.*`: jalur submit KETIGA `taskCmdSubmitWeb` (buffer statis
+  `rc_web`, terpisah dari `rc_ext`/`rc_int`) — satu-satunya jalur submit
+  command yang aman dipanggil dari `loop()` (dua jalur lain masing-masing
+  hanya aman dari task esp-mqtt / task_auto). Beda dari dua jalur lain:
+  mengembalikan hasil seketika (`bool`) dan TIDAK memakai slot luapan
+  1-slot — HTTP `503` sudah jadi jawaban sinkron sendiri, jadi command web
+  tidak ikut memperebutkan slot luapan yang dipakai command MQTT/jadwal.
+  Ring buffer ack terpasang di `sendAck`/`sendScheduleAck` (push), dibaca
+  lewat `taskCmdGetAcksJson` (mutex pendek, snapshot disalin lalu dibangun
+  JSON di luar lock).
+- `src/web_dashboard.*` (baru): `GET /` (dashboard PROGMEM ~17 KB),
+  `GET /api/data` (`Cache-Control: no-store`), `GET /api/acks`,
+  `POST /api/command` (auth `code` query/form arg — pola sama
+  `/api/wifi/*`/`/api/auto/config`, BUKAN field di body JSON), `GET
+  /api/firmware_versions`. Balasan `/api/command` `202 {"queued":true,"id":...}`
+  membalas ack SEBENARNYA lewat jalur ack yang sama dengan MQTT
+  (`GET /api/acks`) — eksekusi command (tulis Modbus, tunggu bukti status
+  sampai 10 dtk) tidak boleh memblokir handler HTTP.
+- `src/main.cpp`: `sysInfoInit()` setelah `crashLogInit()`,
+  `webDashboardInit()` setelah `webInit()`, blok telemetri `loop()`
+  disederhanakan lewat `fillSysInfo()` (perilaku IDENTIK, hanya
+  dipindah — seq masih di-increment di titik yang sama).
+
+**Verifikasi bench yang masih wajib** (checklist, belum dijalankan):
+1. Buka `http://<ip-gateway>/` dari HP (lebar ~360 px) dan desktop — layout
+   tidak pecah, mode gelap otomatis mengikuti OS.
+2. Matikan simulator/BESS (comm_lost) → banner "DATA BASI" muncul dalam
+   beberapa detik; nyalakan lagi → banner hilang otomatis.
+3. Isi `gateway_code` di panel kontrol, klik Enable → konfirmasi muncul →
+   setelah OK, `GET /api/acks` menampilkan ack `enable` dalam ~10 dtk;
+   ulangi untuk Disable dan Set Output.
+4. `code` salah/kosong di `/api/command` → `403`; body > 2048 B → `413`;
+   body bukan JSON valid → tetap `202` tapi ack berikutnya `bad_json`.
+5. Ubah jadwal lewat panel dashboard, reload halaman → nilai yang
+   ditampilkan sama dengan yang baru disimpan (`GET /api/auto/config`
+   dibaca ulang saat load).
+6. Buka DevTools Network saat dashboard aktif ~1 menit: tidak ada dua
+   request `/api/data` yang tumpang tindih (selalu sekuensial), gap
+   antar-request stabil di sekitar 2 dtk (bukan menumpuk saat lambat).
+7. Kirim command lewat MQTT (bukan dashboard) → muncul juga di
+   `GET /api/acks` (ring buffer bukan cuma untuk command dari web).
+
 ## bess-0.2.0 — 23 September 2026
 
 ### Kontrak cloud (perlu tindakan di backend)
