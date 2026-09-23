@@ -52,6 +52,7 @@ Opsi:
 | `--soc` | `50.0` | SOC awal dalam persen |
 | `--scenario` | — | Path file YAML skenario (lihat di bawah); `initial.soc` di file menimpa `--soc` |
 | `--strict-timing` | mati | Buang query yang datang <100 ms setelah balasan sebelumnya (persis device asli) — lihat §"Keputusan fidelity" |
+| `--ip65` | mati | Tiru modul IP65: juga menjawab node **160** (modul tunggal, PDF §2.6), dan menulis `3182` lewat node 160 mengganti alamat modul. Tanpa flag = IP20: alamat dari dip switch, `3182` hanya tersimpan |
 
 Baris log tiap ±2 dtk (`[  12.3s] RUN       p_ac= +5.00 kW soc= 59.9% vdc= 826.2 V`)
 menunjukkan state machine, daya aktif, SOC, dan tegangan DC saat itu — murni untuk
@@ -176,7 +177,14 @@ simulator pun tidak boleh menambahkannya.
    3,5 karakter ≈ 4 ms): dongle USB-serial dan timer Windows menyerahkan byte
    berkelompok sehingga satu query bisa tiba dalam dua potongan. Spec menjamin
    jeda ≥100 ms antar frame, jadi ambang ini tetap aman. Setelah membalas,
-   simulator membuang input sisa (dongle yang meng-echo TX-nya sendiri).
+   simulator membuang input sisa, dan mengabaikan frame yang identik dengan
+   balasannya sendiri bila tiba <100 ms sesudahnya (dongle yang meng-echo TX).
+   `--strict-timing` mengukur jeda dari **akhir** frame sebelumnya sampai
+   **awal** query berikutnya; akhir balasan dihitung dari durasi di kabel
+   (`len × 10/9600` dtk sejak mulai kirim), bukan dari kembalinya `flush()`.
+   Selalu mode **on-grid** — bit 4 (`off_grid`) status tidak pernah di-set;
+   mode off-grid/VSG (`3160`) sengaja tidak disimulasikan karena gateway
+   tidak memakainya.
 8. **Identitas jujur, kabel setia**: simulator menandai dirinya sendiri di log
    terminal (`bess-sim AKTIF di COM10 node 1 (SIMULATOR — bukan device asli)`)
    dan CLI — tapi tidak ada apa pun di frame Modbus yang membocorkan hal itu ke
@@ -185,7 +193,7 @@ simulator pun tidak boleh menambahkannya.
 ## Test
 
 ```bash
-uv run pytest -v       # 64 test: CRC (vektor persis PDF), register map,
+uv run pytest -v       # 73 test: CRC (vektor persis PDF), register map,
                         # fisika, state machine, alarm/skenario, transport, CLI
 uv run bess-sim selftest
 ```

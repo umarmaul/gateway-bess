@@ -79,3 +79,34 @@ def test_fc16_block_write():
     resp = s.handle(append_crc(payload))
     assert resp[:6] == bytes([1, 16, 0x0B, 0xEA, 0, 2])
     assert regs.get(3050) == 100 and regs.get(3051) == 50
+
+
+def make_ip65(node=1):
+    regs = RegisterMap()
+    return ModbusSlave(node, regs, lambda i, on: None, lambda: False, ip65=True), regs
+
+def test_ip65_node_160_dijawab_dengan_alamat_160():
+    """PDF §2.6: modul IP65 tunggal dialamati node 160."""
+    s, _ = make_ip65()
+    resp = s.handle(append_crc(bytes([160, 3, 0x0C, 0x6E, 0, 1])))   # 3182
+    assert resp[:5] == bytes([160, 3, 2, 0, 1])
+
+def test_ip65_ganti_alamat_lewat_160():
+    s, regs = make_ip65()
+    req = append_crc(bytes([160, 6, 0x0C, 0x6E, 0, 5]))              # 3182 = 5
+    assert s.handle(req) == req
+    assert s.node == 5
+    assert s.handle(append_crc(bytes([1, 3, 0x0C, 0x6E, 0, 1]))) is None
+    assert s.handle(append_crc(bytes([5, 3, 0x0C, 0x6E, 0, 1])))[:5] == bytes([5, 3, 2, 0, 5])
+
+def test_ip20_node_160_diam_dan_3182_tak_mengubah_node():
+    s, _, _ = make()
+    assert s.handle(append_crc(bytes([160, 3, 0x0C, 0x6E, 0, 1]))) is None
+    s.handle(append_crc(bytes([1, 6, 0x0C, 0x6E, 0, 5])))
+    assert s.node == 1                 # IP20: alamat dari dip switch
+
+
+def test_frame_kurang_dari_4_byte_diam():
+    s, _, _ = make()
+    assert s.handle(b"") is None
+    assert s.handle(bytes([1, 3, 0])) is None

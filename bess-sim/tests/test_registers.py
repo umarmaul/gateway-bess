@@ -103,3 +103,12 @@ def test_write_block_atomik_rollback_undefined_error():
 
     # Verifikasi 3050 tidak berubah
     assert r.get(3050) == initial_3050
+
+
+def test_get_signed_tolak_register_unsigned():
+    """Membaca register UINT16 sebagai signed memalsukan nilai >=0x8000 jadi
+    negatif — jebakan laten yang harus gagal keras, bukan diam-diam."""
+    import pytest
+    r = RegisterMap()
+    with pytest.raises(TypeError):
+        r.get_signed(1063)             # DC voltage, UINT16

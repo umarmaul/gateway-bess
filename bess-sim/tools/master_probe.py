@@ -9,7 +9,7 @@ from bess_sim.alarms import STATUS_BITS             # noqa: E402
 import serial                                        # noqa: E402
 
 
-def xfer(ser, frame, expect_silence=False):
+def xfer(ser, frame):
     time.sleep(0.11)                 # jeda antar-frame >= 100 ms
     ser.reset_input_buffer()
     ser.write(append_crc(frame))

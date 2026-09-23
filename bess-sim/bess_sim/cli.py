@@ -30,7 +30,7 @@ def selftest() -> int:
 def run(args) -> int:
     from .scenario import Scenario
     from .transport import SerialServer
-    sim = BessSim(node=args.node, soc=args.soc / 100.0)
+    sim = BessSim(node=args.node, soc=args.soc / 100.0, ip65=args.ip65)
     sc = Scenario.load(args.scenario) if args.scenario else None
     if sc and "soc" in sc.initial:
         sim.physics.soc = sc.initial["soc"] / 100.0
@@ -68,6 +68,8 @@ def main(argv=None) -> int:
     pr.add_argument("--soc", type=float, default=50.0)
     pr.add_argument("--scenario")
     pr.add_argument("--strict-timing", action="store_true")
+    pr.add_argument("--ip65", action="store_true",
+                    help="modul IP65: juga jawab node 160, 3182 via 160 ganti alamat")
     sub.add_parser("selftest", help="uji tanpa hardware")
     args = ap.parse_args(argv)
     if args.cmd == "selftest":

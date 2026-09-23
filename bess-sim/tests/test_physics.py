@@ -62,3 +62,14 @@ def test_suhu_naik_dengan_beban():
     t0 = p.tube_temp_c
     run(p, 600, target_kw=50.0, rate_pct_per_s=2000, rated_kw=50.0, running=True)
     assert p.tube_temp_c > t0 + 5
+
+
+def test_akumulator_energi_charge_dan_discharge():
+    p = Physics(soc=0.5)
+    for _ in range(3600):                       # 1 jam @10 kW ekspor, rate besar
+        p.step(1.0, 10.0, 100.0, 50.0, True)
+    assert abs(p.wh_discharge - 10000) < 50     # ~10 kWh
+    assert p.wh_charge == 0
+    for _ in range(1800):                       # 30 menit @-10 kW charge
+        p.step(1.0, -10.0, 100.0, 50.0, True)
+    assert abs(p.wh_charge - 5000) < 100

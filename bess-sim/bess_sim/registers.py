@@ -184,6 +184,9 @@ class RegisterMap:
         return self.values[id_]
 
     def get_signed(self, id_: int) -> int:
+        # Register UINT16 bernilai >=0x8000 akan terbaca negatif — tolak keras.
+        if not REGS[id_].signed:
+            raise TypeError(f"register {id_} UINT16, bukan INT16 — pakai get()")
         return _from_u16(self.values[id_], True)
 
     def set_raw(self, id_: int, value: int) -> None:

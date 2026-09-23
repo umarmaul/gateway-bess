@@ -6,11 +6,12 @@ from .state_machine import StateMachine, St
 
 
 class BessSim:
-    def __init__(self, node: int = 1, soc: float = 0.5, seed: int = 0):
+    def __init__(self, node: int = 1, soc: float = 0.5, seed: int = 0,
+                 ip65: bool = False):
         self.regs = RegisterMap()
         self.physics = Physics(soc=soc, seed=seed)
         self.sm = StateMachine()
-        self.slave = ModbusSlave(node, self.regs, self._coil, self.sm.busy)
+        self.slave = ModbusSlave(node, self.regs, self._coil, self.sm.busy, ip65=ip65)
         self._forced_alarms: dict[tuple[int, int], int] = {}
         # Alarm yang memicu FAULT dan masih aktif. FAULT hanya bisa direset
         # (FC5 OFF) setelah himpunan ini kosong.
