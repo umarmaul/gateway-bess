@@ -275,6 +275,54 @@ static void test_telemetry_ota_pending_verify() {
     TEST_ASSERT_TRUE(doc["data"]["ota"]["pending_verify"].as<bool>());
 }
 
+static void test_telemetry_auto_default_kosong() {
+    // src/ selalu mengisi s.auto_info (task_auto mengembalikan snapshot
+    // setiap saat), tapi builder tetap jujur soal fallback last_action kalau
+    // string-nya kosong (defensif, sama pola dengan data.ota.state).
+    SysInfo s = sys_();
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    JsonObject au = doc["data"]["auto"];
+    TEST_ASSERT_FALSE(au["schedule_enabled"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("none", au["last_action"]);
+    TEST_ASSERT_EQUAL(0, (int)au["last_action_ts"]);
+}
+
+static void test_telemetry_auto_terisi() {
+    SysInfo s = sys_();
+    s.auto_info.schedule_enabled = true;
+    strcpy(s.auto_info.start_hhmm, "17:00");
+    strcpy(s.auto_info.end_hhmm, "21:00");
+    s.auto_info.tz_offset_min = 420;
+    s.auto_info.power_w = 1500.0f;
+    s.auto_info.soc_stop_pct = 10.0f;
+    s.auto_info.soc_recovery_pct = 20.0f;
+    s.auto_info.in_window = true;
+    s.auto_info.battery_ready = true;
+    strcpy(s.auto_info.last_action, "enable_with_power");
+    s.auto_info.last_action_ts = 1785000005;
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    JsonObject au = doc["data"]["auto"];
+    TEST_ASSERT_TRUE(au["schedule_enabled"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("17:00", au["start_hhmm"]);
+    TEST_ASSERT_EQUAL_STRING("21:00", au["end_hhmm"]);
+    TEST_ASSERT_EQUAL(420, (int)au["tz_offset_min"]);
+    TEST_ASSERT_FLOAT_WITHIN(0.1, 1500, au["power_w"]);
+    TEST_ASSERT_TRUE(au["in_window"].as<bool>());
+    TEST_ASSERT_TRUE(au["battery_ready"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("enable_with_power", au["last_action"]);
+    TEST_ASSERT_EQUAL_UINT32(1785000005u, au["last_action_ts"].as<uint32_t>());
+}
+
 static void test_parse_enable() {
     Command c;
     const char* j = "{\"id\":\"a1\",\"cmd\":\"enable\",\"args\":{}}";
@@ -439,6 +487,8 @@ int main() {
     RUN_TEST(test_ts_nol_saat_ntp_belum_sinkron);
     RUN_TEST(test_ts_diteruskan_saat_ntp_sinkron);
     RUN_TEST(test_ack_ts_nol_saat_ntp_belum_sinkron);
+    RUN_TEST(test_telemetry_auto_default_kosong);
+    RUN_TEST(test_telemetry_auto_terisi);
     RUN_TEST(test_parse_enable);
     RUN_TEST(test_parse_set_power);
     RUN_TEST(test_parse_set_output_nama_resmi);

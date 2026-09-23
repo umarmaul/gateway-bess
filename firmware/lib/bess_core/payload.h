@@ -30,6 +30,24 @@ struct OtaInfo {
     bool pending_verify;                      // true = image ini masih PENDING_VERIFY (rollback aktif)
 };
 
+// Snapshot jadwal + auto-SOC (sub-proyek F) untuk blok data.auto di
+// telemetri -- diisi task_auto (src/), murni data supaya builder tetap
+// testable native. Field persis spec §F (docs/superpowers/specs/
+// 2026-09-23-subproyek-EFGH-design.md).
+struct AutoInfo {
+    bool schedule_enabled;
+    char start_hhmm[6];       // "HH:MM"
+    char end_hhmm[6];
+    int tz_offset_min;
+    float power_w;
+    float soc_stop_pct;
+    float soc_recovery_pct;
+    bool in_window;
+    bool battery_ready;
+    char last_action[24];     // "none"|"enable_with_power"|"disable"
+    uint32_t last_action_ts;  // 0 kalau belum pernah ada aksi (tsOrZero saat build)
+};
+
 struct SysInfo {
     char gw[13];              // MAC 12 hex + NUL
     const char* fw_version;   // "bess-0.1.0"
@@ -45,6 +63,7 @@ struct SysInfo {
     uint32_t min_free_heap;          // low-water mark sejak boot
     CrashInfo crash;                 // present=false -> "last_crash": null
     OtaInfo ota;                     // state=="" -> builder melapor "idle" (defensif)
+    AutoInfo auto_info;              // blok data.auto (sub-proyek F)
 };
 
 // Builds telemetry JSON per spec §6.1
