@@ -150,6 +150,114 @@ karena mengendalikan konverter 50 kW.
 7. Field `ap_active`/`mdns` muncul benar di `data.network` telemetri saat AP
    menyala vs mati.
 
+### Sub-proyek F (Jadwal + auto-SOC)
+
+Menyusul E di rilis yang sama (spec §F). **Belum diuji di hardware** (bench
+tak terpasang) — verifikasi native test (28 test `sched_logic` + 6 test
+`commands` untuk parsing `set_schedule` + 2 test blok `data.auto`) + build
+ESP32 SUCCESS (flash 68,7%) + 84 test pytest `bess-sim` (tak tersentuh,
+tetap lulus).
+
+**Kontrak cloud (perlu tindakan di backend)**: command baru **`set_schedule`**
+(topic `device/<gw>/command` biasa) + blok telemetri baru **`data.auto`** —
+lihat `firmware/README.md` §Jadwal + auto-control SOC untuk contoh JSON
+lengkap (args, ack, `GET`/`POST /api/auto/config`, field `data.auto`).
+Ringkas: satu window harian per gateway (`enabled`, `start_hhmm`, `end_hhmm`
+format `"HH:MM"`, `soc_stop_pct`, `soc_recovery_pct`, `power_w`,
+`tz_offset_min`), ack `{id,cmd,result,detail,applied,ts}` seperti command
+lain. `data.auto` `{schedule_enabled,start_hhmm,end_hhmm,tz_offset_min,
+power_w,soc_stop_pct,soc_recovery_pct,in_window,battery_ready,last_action,
+last_action_ts}`.
+
+**Deviasi dari pola tim** (sengaja, menyelaraskan keputusan owner 23 Juli
+gateway-v2 "gateway tak pernah auto-enable sendiri" — lihat
+`lib/bess_core/sched_logic.h`): tim (`AutoControl.cpp`) punya **auto-restart**
+opt-in yang mengizinkan gateway auto-ENABLE sendiri saat SOC pulih ke
+`recovery`; gateway-bess **disable-only** murni untuk proteksi SOC otonom
+(hanya `disable`, tak pernah `enable` tanpa instruksi eksplisit) — jadwal
+(`set_schedule`) adalah **satu-satunya** jalur gateway boleh `enable` dirinya
+sendiri, dan itu pun hanya sebagai eksekusi instruksi cloud/operator yang
+sudah disetel, bukan keputusan otonom. Deviasi kedua: `power_w` pada
+`set_schedule` **tidak dipangkas ±120% rated saat disimpan** (beda dari
+`soc_stop_pct`/`soc_recovery_pct`/`tz_offset_min` yang dipangkas langsung) —
+pemangkasan baru terjadi saat eksekusi lewat jalur `set_output` biasa,
+karena rated power device bisa saja belum pernah terbaca saat
+`set_schedule` diterima.
+
+- `lib/bess_core/sched_logic.*`: parser/formatter `"HH:MM"`, konfigurasi
+  jadwal + clamp partial-update (`soc_stop_pct` 0-99, `soc_recovery_pct`
+  dipaksa `>soc_stop_pct`, `tz_offset_min` -720..840), evaluasi window harian
+  (lintas tengah malam + tz), dan `schedDecide` murni: proteksi SOC
+  disable-only (selalu aktif, walau jadwal nonaktif) + jadwal sebagai
+  instruksi eksplisit (aksi edge-triggered per transisi window, TIDAK
+  di-retry sampai transisi berikutnya kalau syarat gagal tepat saat edge
+  masuk). 28 test native (tabel kasus: lintas tengah malam, tz positif/
+  negatif, waktu belum sinkron, fault/comm_lost saat edge, SOC rendah saat
+  charging tak memicu disable, dll).
+- `lib/bess_core/commands.*`: `Command` diperluas dengan tipe `SET_SCHEDULE`
+  + `SchedSetInput sched` + `sched_bad_input` (HH:MM tak valid / `power_w`
+  NaN — ditolak SEBELUM `schedApplySetInput` dipanggil sama sekali, config
+  tersimpan tidak tersentuh). 6 test native baru (`test_native_commands`,
+  folder yang sebelumnya belum ada untuk `parseCommand`).
+- `lib/bess_core/payload.*`: `AutoInfo` + blok `data.auto` di
+  `buildTelemetryJson` (builder defensif — `last_action` kosong → `"none"`,
+  sama pola dengan `data.ota.state`).
+- `src/schedule.cpp` (integrasi ESP32): NVS `app_cfg` (namespace yang sama
+  dihapus tombol factory reset E) + cache RAM mutex-protected, satu jalur
+  persist (`schedApplyAndSave`) dibagi command MQTT `set_schedule` dan HTTP
+  `POST /api/auto/config`. `schedNotifyManualOverride()` mematikan jadwal
+  saat command manual (bukan dari jadwal sendiri) masuk. ⚠️ File **sengaja
+  diberi nama `schedule.h`/`schedule.cpp`, BUKAN `sched.h`/`sched.cpp`** —
+  nama itu bentrok dengan header POSIX `<sched.h>` milik toolchain (ditarik
+  transitif lewat `<pthread.h>` yang meng-include `<sched.h>` pakai angle
+  bracket); karena `-Isrc` ada di search path compiler, deklarasi kita
+  tertelan ke dalam blok `extern "C"` milik `pthread.h` dan gagal link
+  (linkage C, bukan C++) — dikonfirmasi lewat pembacaan output preprocessor
+  (`-E`) yang menunjukkan isi `sched.h` lama muncul PERSIS di tengah isi
+  `pthread.h`.
+- `src/task_auto.cpp`: task baru (prioritas 1, diawasi task watchdog, tiap
+  5 dtk) — snapshot `g_state.bess` + NTP → `schedDecide` (murni) → eksekusi
+  lewat `taskCmdSubmitInternal` (jalur Modbus/safety/ack SAMA dengan command
+  cloud, TANPA menonaktifkan jadwal yang memicunya). Ack aksi otonom
+  `id:"auto-<epoch>"`. Snapshot `data.auto` diekspos via `autoGetInfo`
+  (mutex, pola sama `task_ota`).
+- `src/task_cmd.cpp`: command internal (`RawCmd.internal`) dibedakan dari
+  command eksternal — hanya command manual (cloud/HTTP) yang memanggil
+  `schedNotifyManualOverride()`; `set_schedule` dieksekusi via
+  `schedApplyAndSave` + ack format sendiri (`schedBuildAck`, `applied`
+  berisi config jadwal, bukan `power_pct`/`power_w`).
+- `src/web.cpp`: `GET`/`POST /api/auto/config` (field tim:
+  `enabled,threshold,recovery,start,end,tz_offset` + `power_w`, `code`
+  wajib untuk `POST` — paritas penyimpangan E, LAN "trusted" saja tak cukup
+  untuk gateway yang mengendalikan konverter 50 kW).
+- `src/main.cpp`: `schedInit()` + `taskAutoStart()` (setelah `taskCmdStart()`
+  — butuh antreannya sudah ada), `autoGetInfo()` mengisi `data.auto` tiap
+  telemetri.
+
+**Verifikasi bench yang masih wajib** (checklist, belum dijalankan):
+1. `set_schedule` dengan window pendek (mis. 5 menit dari sekarang) + SOC
+   di atas `soc_recovery_pct` → tepat di edge masuk window, gateway
+   `set_output` lalu `enable` sendiri (ack `id:"auto-<epoch>"` di
+   `device/<gw>/command/ack`); tepat di edge keluar → `disable` sendiri.
+2. Set `fault` aktif (atau putus BMS/comm_lost) tepat sebelum edge masuk
+   window → gateway TIDAK enable, dan TIDAK retry walau fault hilang
+   sebelum window berakhir (baru dicoba lagi window berikutnya).
+3. Kirim `enable`/`disable`/`set_output` manual (MQTT atau `POST
+   /api/command`) saat jadwal aktif → `data.auto.schedule_enabled` jadi
+   `false` di telemetri berikutnya, jadwal tidak menyalakan/mematikan BESS
+   lagi sampai `set_schedule`/`POST /api/auto/config` diset ulang.
+4. BESS mengekspor + SOC turun sampai `<= soc_stop_pct` → gateway `disable`
+   sendiri walau jadwal nonaktif/di luar window (proteksi disable-only).
+   SOC rendah saat CHARGING tidak memicu ini.
+5. Matikan NTP (putus internet sebelum sinkron, atau reboot lalu cek log
+   sebelum `time_valid:true`) → jadwal tidak bertindak sama sekali
+   (`in_window` tetap `false`) walau jam lokal seharusnya di dalam window.
+6. `POST /api/auto/config` tanpa `code`/`code` salah → `403 forbidden`,
+   config tidak berubah; `start`/`end` bukan `"HH:MM"` → `400 bad_hhmm`.
+7. Window lintas tengah malam (mis. `22:00`..`06:00`) + `tz_offset_min`
+   WIB (`420`) → verifikasi edge masuk/keluar terjadi di jam LOKAL yang
+   benar, bukan UTC.
+
 ## bess-0.2.0 — 23 September 2026
 
 ### Kontrak cloud (perlu tindakan di backend)

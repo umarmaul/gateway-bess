@@ -495,15 +495,147 @@ diiklankan (tanpa `.local`).
 
 ### Kerangka web server (untuk F/H)
 
-`src/web.cpp` mendaftarkan `/wifi` + `/api/wifi/*` di atas `WebServer`
-sinkron biasa (`handleClient()` dari `loop()`, **harus cepat** -- `loop()`
-diawasi task watchdog 120 dtk, jangan tunggu lock esp-mqtt/Modbus lama).
-`webServer()` (`web.h`) mengekspos instance `WebServer&` supaya modul
-berikutnya (F: `/api/auto/config`; H: `/`, `/api/data`, `/api/command`,
+`src/web.cpp` mendaftarkan `/wifi` + `/api/wifi/*` (E) dan `/api/auto/config`
+(F) di atas `WebServer` sinkron biasa (`handleClient()` dari `loop()`,
+**harus cepat** -- `loop()` diawasi task watchdog 120 dtk, jangan tunggu lock
+esp-mqtt/Modbus lama). `webServer()` (`web.h`) mengekspos instance
+`WebServer&` supaya modul berikutnya (H: `/`, `/api/data`, `/api/command`,
 `/api/acks`, `/api/firmware_versions`) mendaftarkan rute tambahan tanpa
 membuat server sendiri.
 
+## Jadwal + auto-control SOC
+
+Sub-proyek F (spec `docs/superpowers/specs/2026-09-23-subproyek-EFGH-design.md`
+§F). Satu window harian per gateway (bukan array jadwal), disimpan NVS
+`app_cfg` (namespace yang sama dihapus tombol factory reset di §Provisioning).
+Logika murni (parsing, clamp, evaluasi window, keputusan) ada di
+`lib/bess_core/sched_logic.*` -- 28 test native mencakup lintas tengah
+malam, tz, waktu belum sinkron, dan tabel kasus edge/retry di bawah.
+
+### Kebijakan (menyelaraskan keputusan owner 23 Juli, gateway-v2: "gateway
+tak pernah auto-enable sendiri")
+
+- **Proteksi SOC otonom = disable-only, SELALU aktif** (dengan atau tanpa
+  jadwal): begitu BESS mengekspor (`active_power_kw > 0`) **dan**
+  `soc_percent <= soc_stop_pct` **dan** sedang `running` → gateway mengirim
+  `disable` sendiri. Default `soc_stop_pct=10`. SOC rendah saat **charging**
+  (`active_power_kw <= 0`) **tidak** memicu ini -- baterai memang sedang diisi.
+- **Jadwal = instruksi eksplisit dari cloud/operator**, jadi mengeksekusinya
+  BUKAN keputusan otonom gateway: gateway **tidak pernah** memutuskan sendiri
+  kapan boleh menyala, ia hanya menjalankan window yang sudah disetel.
+  Bertindak **hanya** kalau `enabled=true` **dan** jam gateway sudah
+  tersinkron NTP (`ts != 0`) -- sebelum itu, jadwal **tidak bertindak sama
+  sekali** (tidak ENABLE, tidak DISABLE).
+- Aksi jadwal terjadi **sekali per transisi window (edge)**, bukan tiap
+  siklus evaluasi (~5 dtk) -- operator boleh mematikan BESS manual di
+  tengah window tanpa dinyalakan ulang terus-menerus oleh gateway.
+  - **Edge masuk window**: kalau `soc_percent >= soc_recovery_pct` **dan**
+    tidak `fault` **dan** tidak `comm_lost` → `set_output power_w` lalu
+    `enable`. Kalau syarat itu GAGAL tepat saat edge (mis. fault sedang
+    aktif), gateway **tidak retry** sampai window ini berakhir dan window
+    berikutnya dimulai -- bukan dicoba ulang tiap 5 detik.
+  - **Edge keluar window**: `disable`, tanpa syarat tambahan.
+- `battery_ready` (juga muncul di `data.auto`) = `soc_percent >=
+  soc_recovery_pct` **dan** tidak fault **dan** tidak comm_lost -- independen
+  dari jadwal aktif atau tidak, dipakai operator/cloud sebagai indikator
+  "BESS layak dinyalakan" di luar mekanisme jadwal.
+- **Command manual** (`enable`/`disable`/`set_output`/`set_power`, dari MQTT
+  cloud ATAU `POST /api/command` H) **menonaktifkan jadwal**
+  (`schedule_enabled` → `false`, tersimpan NVS) -- intervensi operator
+  menang sampai jadwal diset ulang eksplisit lewat `set_schedule` atau
+  `POST /api/auto/config`. Kontrak ack command manual **tidak berubah**;
+  penonaktifan hanya terlihat di log serial + `data.auto.schedule_enabled`
+  pada telemetri berikutnya. Aksi yang dijalankan **jadwal itu sendiri**
+  (lewat `task_auto`) dikecualikan dari aturan ini -- kalau tidak, jadwal
+  akan mematikan dirinya sendiri setiap kali ia enable BESS.
+
+Eksekusi jadwal lewat `task_auto` (task baru, evaluasi tiap 5 dtk, diawasi
+task watchdog) → mengantrekan command **internal** ke `task_cmd` (jalur
+Modbus + safety + ack **sama persis** dengan command cloud). Ack aksi
+otonom memakai `id:"auto-<epoch>"` supaya cloud melihatnya sebagai
+tindakan gateway, bukan command yang mereka kirim sendiri.
+
+### Command `set_schedule`
+
+```json
+{"id":"s1","cmd":"set_schedule","args":{
+  "enabled":true,"start_hhmm":"17:00","end_hhmm":"21:00",
+  "soc_stop_pct":10,"soc_recovery_pct":20,"power_w":1500,"tz_offset_min":420}}
+```
+
+Semua field di `args` **opsional** (partial update -- field yang tak
+dikirim mempertahankan nilai tersimpan). `start_hhmm`/`end_hhmm` format
+`"HH:MM"` ketat (dua digit jam dua digit menit); window boleh melewati
+tengah malam (`start_hhmm > end_hhmm`, mis. `"22:00"..."06:00"`).
+`tz_offset_min` = menit dari UTC (WIB = `420`).
+
+Ack:
+
+```json
+{"id":"s1","cmd":"set_schedule","result":"accepted","detail":"",
+ "applied":{"enabled":true,"start_hhmm":"17:00","end_hhmm":"21:00",
+ "soc_stop_pct":10,"soc_recovery_pct":20,"power_w":1500,"tz_offset_min":420},
+ "ts":1785000001}
+```
+
+`result`: `"accepted"`, `"clamped"`, atau `"rejected"`. `"clamped"` berarti
+`soc_stop_pct` dipangkas ke 0-99, `soc_recovery_pct` dipangkas ke 0-100 lalu
+**dipaksa naik** ke `soc_stop_pct+1` bila masih di bawahnya (berlaku juga
+kalau `soc_recovery_pct` sendiri tidak dikirim kali ini -- invariant
+recovery>stop selalu dijaga di config tersimpan), atau `tz_offset_min`
+dipangkas ke -720..840 -- `applied` selalu berisi nilai yang **benar-benar
+tersimpan**. `"rejected"`/`detail:"bad_value"` = `start_hhmm`/`end_hhmm`
+bukan `"HH:MM"` valid, atau `power_w` NaN -- config tersimpan **TIDAK
+disentuh** sama sekali, `applied` melaporkan config lama apa adanya.
+
+⚠️ **Deviasi dari spec**: `power_w` **tidak dipangkas ±120% rated saat
+disimpan** (beda dari `soc_stop_pct`/`soc_recovery_pct`/`tz_offset_min` di
+atas) -- pemangkasan itu baru terjadi **saat eksekusi**, lewat jalur
+`set_output` biasa (`planPowerPct`, lihat §Command di atas), karena rated
+power device (`3146`) belum tentu diketahui saat command `set_schedule`
+diterima (bisa saja belum pernah terbaca). `applied.power_w` di ack
+`set_schedule` karena itu adalah nilai **mentah tersimpan**, bukan yang
+sudah dipangkas.
+
+### `GET`/`POST /api/auto/config`
+
+```
+GET /api/auto/config
+-> {"ok":true,"enabled":true,"threshold":10.0,"recovery":20.0,
+    "start":"17:00","end":"21:00","tz_offset":420,"power_w":1500.0,
+    "in_window":false,"battery_ready":true}
+
+POST /api/auto/config
+    enabled=true&threshold=10&recovery=20&start=17:00&end=21:00&
+    tz_offset=420&power_w=1500&code=<gateway_code>
+-> (bentuk respons sama dengan GET, config SETELAH diterapkan)
+```
+
+Field form-encoded, **semua opsional** (partial update, sama semantik
+dengan `set_schedule`): `enabled`, `threshold` (=`soc_stop_pct`),
+`recovery` (=`soc_recovery_pct`), `start`, `end`, `tz_offset`, `power_w`.
+`code` (=`gateway_code`, lihat §Provisioning) **wajib** -- tanpa itu atau
+salah, `403 {"ok":false,"error":"forbidden"}` (endpoint ini mengendalikan
+kapan konverter 50 kW menyala, LAN "trusted" saja tak cukup, paritas pola
+E). `start`/`end` bukan `"HH:MM"` valid → `400
+{"ok":false,"error":"bad_hhmm"}`, config tersimpan tidak berubah. `GET`
+tidak butuh `code` (hanya membaca).
+
+### `data.auto` (telemetri)
+
+```json
+"auto": {"schedule_enabled": false, "start_hhmm": "17:00", "end_hhmm": "21:00",
+ "tz_offset_min": 420, "power_w": 1500.0, "soc_stop_pct": 10.0,
+ "soc_recovery_pct": 20.0, "in_window": false, "battery_ready": true,
+ "last_action": "none", "last_action_ts": 0}
+```
+
+`in_window`/`battery_ready` = evaluasi **saat ini** (dihitung ulang tiap
+siklus `task_auto`, bukan cache basi). `last_action` = aksi jadwal terakhir
+yang benar-benar dieksekusi -- `"none"` (belum pernah), `"enable_with_power"`,
+atau `"disable"`; `last_action_ts` = 0 sampai aksi pertama terjadi.
+
 ## Non-scope fase ini
 
-Dashboard web lokal (H), auto-control SOC + jadwal (F),
-fault-history ring buffer, TLS 8883 produksi (bench pakai broker dev `1883` polos).
+Dashboard web lokal (H), fault-history ring buffer, TLS 8883 produksi
+(bench pakai broker dev `1883` polos).
