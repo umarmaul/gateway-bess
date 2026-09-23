@@ -78,7 +78,7 @@ dan seluruh pengujian di bawah berjalan normal tanpa intervensi manual.
 
 Setup bench:
 - Simulator: `uv run bess-sim run --port COM10 --soc 60` (proses background, log ke file).
-- Probe: `uv run --with paho-mqtt python -u tools/cloud_probe.py --gw 58E6C5218C78 --user guest --passwd <mqtt-pass> <cmd>`
+- Probe: `uv run --with paho-mqtt python -u tools/cloud_probe.py --gw 58E6C5218C78 --user <mqtt-user> --passwd <mqtt-pass> <cmd>`
   dijalankan dari `bess-sim/`, output di-redirect ke file, di-poll dengan loop
   `until grep -q ... ; do sleep 1; done`, lalu proses (`uv`+turunannya) di-`taskkill /T /F`
   setelah ack tertangkap (karena `loop_forever()` tidak pernah keluar sendiri).

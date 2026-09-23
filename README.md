@@ -17,10 +17,12 @@ gateway-bess/
 │                 laptop. Lihat bess-sim/README.md.
 ├── firmware/     Firmware gateway (PlatformIO, ESP32-C6, FreeRTOS) — master
 │                 Modbus RTU + uplink MQTT ke cloud. Lihat firmware/README.md.
-├── docs/superpowers/
-│   ├── specs/2026-08-09-gateway-bess-design.md   Spec desain (disetujui)
-│   └── plans/2026-08-09-gateway-bess.md          Rencana implementasi per-task
-├── .superpowers/sdd/2026-08-09-gateway-bess/     Brief + laporan tiap task (log kerja)
+├── docs/
+│   ├── Dokumentasi_Gateway_BESS_Fase1.docx       Dokumentasi lengkap fase 1
+│   └── superpowers/
+│       ├── specs/    Spec desain: fase 1 (2026-08-09) + fondasi paritas (2026-08-13)
+│       ├── plans/    Rencana implementasi per-task untuk kedua fase
+│       └── sdd-archive/   Ledger + laporan verifikasi tiap task (bukti bench)
 ├── BSL  AC series Energy Storage Converter_Modbus RTU protocol V2.1.0.pdf
 └── ESS-Grid C109 User Manual.pdf                 Sumber kebenaran protokol/hardware BESS
 ```
@@ -69,9 +71,10 @@ untuk mengirim command/melihat ack dari sisi "cloud").
 
 ## Spec & rencana
 
-- Desain (disetujui, per bagian A/B/C): [`docs/superpowers/specs/2026-08-09-gateway-bess-design.md`](docs/superpowers/specs/2026-08-09-gateway-bess-design.md)
-- Rencana implementasi 16 task + self-review: [`docs/superpowers/plans/2026-08-09-gateway-bess.md`](docs/superpowers/plans/2026-08-09-gateway-bess.md)
-- Brief & laporan verifikasi tiap task (termasuk bukti bench hardware): [`.superpowers/sdd/2026-08-09-gateway-bess/`](.superpowers/sdd/2026-08-09-gateway-bess/)
+- Fase 1 — desain (disetujui, per bagian A/B/C): [`docs/superpowers/specs/2026-08-09-gateway-bess-design.md`](docs/superpowers/specs/2026-08-09-gateway-bess-design.md)
+- Fase 1 — rencana implementasi 16 task: [`docs/superpowers/plans/2026-08-09-gateway-bess.md`](docs/superpowers/plans/2026-08-09-gateway-bess.md)
+- Fase 2 (fondasi paritas vs `BEPESP32_WiFi_Extension` branch `gateway-mqtt`): [`specs/2026-08-13-fondasi-paritas-design.md`](docs/superpowers/specs/2026-08-13-fondasi-paritas-design.md) + [`plans/2026-08-13-fondasi-paritas.md`](docs/superpowers/plans/2026-08-13-fondasi-paritas.md)
+- Ledger + laporan verifikasi tiap task (termasuk bukti bench hardware): [`docs/superpowers/sdd-archive/`](docs/superpowers/sdd-archive/) (fase 1 di akar, fase 2 di subfolder `2026-08-13-fondasi-paritas/`)
 
 ## BESS asli menggantikan simulator TANPA perubahan firmware
 
@@ -93,7 +96,10 @@ bukan sesuatu yang "nanti disesuaikan di firmware".
 
 Provisioning/captive portal, OTA (ESP maupun BESS), dashboard web lokal,
 auto-control berbasis SOC, fault-history ring buffer, TLS produksi (bench pakai
-broker dev `1883` tanpa TLS). Lihat keputusan D8 di spec desain.
+broker dev `1883` tanpa TLS). Lihat keputusan D8 di spec desain. Sub-proyek
+berikutnya yang sudah teridentifikasi: E provisioning, F scheduling, G OTA,
+H dashboard. Prasyarat G (command >511 B terpotong diam-diam) sudah dibereskan
+di `bess-0.2.0` — batas command kini 2048 B (`CMD_JSON_MAX`).
 
 ## Batasan
 
