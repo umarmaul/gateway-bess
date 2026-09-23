@@ -4,6 +4,95 @@ Format: versi firmware = `FW_VERSION` di `firmware/src/config.h` (ikut terkirim 
 `data.firmware_version` di telemetri). Bagian **Kontrak cloud** berisi hal yang wajib
 diketahui tim backend/VPP; sisanya internal.
 
+## bess-0.3.0 — 23 September 2026
+
+Sub-proyek G (spec `docs/superpowers/specs/2026-09-23-subproyek-EFGH-design.md`):
+OTA gateway via MQTT dengan tanda tangan Ed25519. **Belum diuji di hardware**
+(tak ada bench terpasang saat implementasi) — verifikasi native test (37 test
+`ota_logic` + 3 test blok `data.ota`) + build + 10 test pytest bench tool.
+
+### Kontrak cloud (perlu tindakan di backend)
+
+**Topic baru** (per `<gw>`, QoS1): `ota/manifest`/`ota/chunk` (cloud → gateway,
+tidak retained), `ota/ack` (gateway → cloud, tidak retained), `ota/status`
+(gateway → cloud, **retained**). Detail lengkap field/validasi/state di
+`firmware/README.md` §OTA gateway.
+
+**`hardware` WAJIB `"bep-gateway-bess-v1"`** di manifest (BUKAN
+`"bep-gateway-v1"` milik gateway DCON tim) — papan fisik identik, jadi
+backend harus mengirim manifest dengan hardware string yang benar per jenis
+gateway atau image akan ditolak `hardware_mismatch`. `image_type` harus
+`"gateway"` (BESS tidak punya jalur OTA proxy DCON seperti gateway lama).
+
+**Tanda tangan**: Ed25519 detached atas 32 byte digest SHA-256 biner (bukan
+manifest/image), kunci publik tim yang sama dengan gateway DCON
+(`X76lzB83YKaD9wf/qBa5eV5/Rnm1PIzRckIdgNkIC98=`) — server cloud yang sudah
+menandatangani image gateway DCON tidak perlu kunci baru untuk gateway BESS.
+
+**`data.ota`** (telemetri, field baru): `{state,id,running_partition,
+pending_verify}` — lihat firmware/README.md §`data.ota`.
+
+**Command baru ditolak selama OTA**: semua command MQTT biasa (`enable`,
+`disable`, `set_output`/`set_power`) dijawab `rejected`/`ota_in_progress`
+selama job OTA aktif.
+
+**Deviasi dari kontrak referensi tim** (tidak didaftarkan eksplisit di
+dokumentasi mereka, lihat firmware/README.md §OTA untuk detail): amplop chunk
+yang tidak bisa diurai sama sekali (JSON rusak/field hilang) dipetakan ke
+`detail:"unexpected_chunk"`.
+
+### Firmware (internal)
+
+- `lib/bess_core/ota_logic.*`: parser+validator manifest, mesin status urutan
+  chunk (new/duplicate/stale/unexpected/wrong_job), decode base64/hex tulisan
+  sendiri (tak ada libsodium di native), builder JSON ack+status. Murni,
+  37 test native.
+- `src/task_ota.cpp`: verifikasi Ed25519 (libsodium, prebuilt di
+  `framework-arduinoespressif32-libs` — tertaut otomatis tanpa perubahan
+  `platformio.ini`) SEBELUM `esp_ota_begin`; SHA-256 inkremental (mbedtls)
+  sambil menulis tiap chunk langsung ke partisi; finalize → NVS `mqtt_ota` →
+  reboot 1 dtk; job timeout 120 dtk tanpa chunk baru. Task **tidak** diawasi
+  task watchdog (`esp_ota_write` bisa lambat, menunggu `mqtt_tx` tak boleh
+  memicu reboot).
+- Rollback: `verifyRollbackLater()` di-override (`extern "C"`, symbol weak
+  arduino-esp32) — image baru boot `PENDING_VERIFY`, ditandai valid saat MQTT
+  tersambung pertama kali; 15 menit tanpa tersambung → mark-invalid + reboot
+  paksa ke image lama. Status persisted dipublikasikan sekali per boot dari
+  NVS, ditandai `reported` supaya tak terulang tiap reconnect.
+- `mqtt_tx` digeneralisasi dari antrean khusus ack ke antrean generik
+  `{topic_id,retain,t_ms,n,json}` (`mqttPublish`) — dipakai ack/ota_ack/
+  ota_status, aturan tahan-sampai-connected + buang basi dipertahankan.
+  `FW_VERSION` → `bess-0.3.0`.
+
+### Simulator/bench
+
+- `bess-sim/tools/ota_publish.py`: alat bench yang memerankan server cloud —
+  tanda tangan Ed25519 (`cryptography`), kirim manifest+chunk dengan
+  flow-control ack, `--gen-key` untuk kunci dev. `cryptography` ditambah
+  sebagai dev dependency `bess-sim` (`uv add --dev`); `paho-mqtt` TIDAK
+  ditambah ke dependensi proyek (jalankan via `uv run --with paho-mqtt ...`,
+  konsisten dengan `tools/cloud_probe.py`).
+
+### Verifikasi bench yang masih wajib (checklist, belum dijalankan)
+
+1. `--gen-key` → tempel public key ke `secrets.h` (`OTA_ED25519_PUBKEY_B64`)
+   di gateway bench, reflash.
+2. Kirim firmware.bin kecil (mis. build `bess-0.3.0` itu sendiri) via
+   `ota_publish.py`: manifest `accepted`, tiap chunk `accepted`, status
+   berjalan `downloading → verifying → restarting`, gateway reboot.
+3. Pasca-reboot: `[boot] gateway-bess bess-0.3.0` muncul, status MQTT
+   `installed` (retained), `data.ota.pending_verify:false`.
+4. Kirim manifest dengan `hardware:"bep-gateway-v1"` (salah) →
+   `rejected`/`hardware_mismatch`, TIDAK ada byte tertulis ke flash.
+5. Kirim manifest dengan `signature` yang sengaja diubah satu karakter →
+   `rejected`/`signature_invalid`.
+6. Kirim `enable` di tengah job OTA aktif → `rejected`/`ota_in_progress`.
+7. Matikan server di tengah chunk (jangan kirim >120 dtk) → status
+   `failed`/`timeout`, job bisa dimulai ulang dari manifest baru.
+8. Flash image yang SENGAJA crash sebelum MQTT connect (mis. panic di
+   `setup()`) → bootloader rollback otomatis ke image lama dalam beberapa
+   detik (uji dengan hati-hati, siapkan jalur recovery SWD/USB kalau gagal).
+
 ## bess-0.2.0 — 23 September 2026
 
 ### Kontrak cloud (perlu tindakan di backend)

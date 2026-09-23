@@ -43,7 +43,7 @@ pio device monitor -p COM3 -b 115200                    # log serial (Ctrl+C kel
 ```
 
 Native unit test (logika murni, tanpa hardware — CRC16, decode register, parser
-JSON command/ack, framing Modbus):
+JSON command/ack, framing Modbus, parser+validator manifest/chunk OTA):
 
 ```bash
 pio test -e native
@@ -53,7 +53,7 @@ Log boot yang sehat:
 
 ```
 [boot] reset=POWERON boot_count=12 heap=371764 min_heap=366776
-[boot] gateway-bess bess-0.2.0
+[boot] gateway-bess bess-0.3.0
 [boot] gw=58E6C5218C78
 [wifi] OK rssi=-54 ip=192.168.18.52
 [mqtt] connected
@@ -79,9 +79,10 @@ muncul sekali dan ringkasannya ikut telemetri sebagai `last_crash`:
 |---|---|---|
 | `loop()` (Arduino) | 1 | Tick WiFi reconnect, LED status, kirim telemetri MQTT tiap `TELEMETRY_PERIOD_MS` (60 dtk) |
 | `task_bess` (`task_bess.cpp`) | 3 | Poll Modbus BESS tiap `POLL_PERIOD_MS` (1,5 dtk): telemetri `1050..1108` → alarm `2050..2057` → setpoint `3050` → param `3146..3184`; decode ke `BessData`; tandai `comm_lost` setelah `COMM_LOST_AFTER`=3 siklus gagal beruntun |
-| `task_cmd` (`task_cmd.cpp`) | 2 | Antrian command dari MQTT (`taskCmdSubmit`); eksekusi `enable`/`disable`/`set_output` (alias `set_power`) via Modbus, tunggu bukti nyata (bit status atau readback), kirim ack |
-| `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Start client saat WiFi pertama naik, LWT `device/<gw>/status`, subscribe `device/<gw>/command` |
-| `mqtt_tx` (`mqtt_link.cpp`) | 1 | **Satu-satunya** pemanggil `esp_mqtt_client_enqueue` (QoS1). `loop()` menitip telemetri terbaru (latest wins), `task_cmd` menitip ack ke antrean 8 slot yang ditahan sampai MQTT terhubung (basi >10 menit dibuang). Sengaja **tidak** diawasi watchdog: dialah yang menanggung penantian lock esp-mqtt saat link tercekik |
+| `task_cmd` (`task_cmd.cpp`) | 2 | Antrian command dari MQTT (`taskCmdSubmit`); eksekusi `enable`/`disable`/`set_output` (alias `set_power`) via Modbus, tunggu bukti nyata (bit status atau readback), kirim ack. Menolak semua command dengan `ota_in_progress` selama job OTA aktif |
+| `task_ota` (`task_ota.cpp`) | 2 | OTA gateway via MQTT (sub-proyek G) — lihat §OTA di bawah. **Tidak** didaftarkan ke task watchdog (`esp_ota_write` bisa lambat karena erase flash, dan menunggu `mqtt_tx` tidak boleh berujung reboot) |
+| `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Start client saat WiFi pertama naik, LWT `device/<gw>/status`, subscribe `device/<gw>/command` + `device/<gw>/ota/{manifest,chunk}`, panggil `otaOnMqttConnected()` tiap `MQTT_EVENT_CONNECTED` |
+| `mqtt_tx` (`mqtt_link.cpp`) | 1 | **Satu-satunya** pemanggil `esp_mqtt_client_enqueue` (QoS1). `loop()` menitip telemetri terbaru (latest wins); `task_cmd`/`task_ota` menitip pesan (`mqttPublish`) ke antrean generik 8 slot `{topic,retain,json}` (ack/ota_ack/ota_status) yang ditahan sampai MQTT terhubung (basi >10 menit dibuang; `retain` per pesan — status OTA retained, ack tidak). Sengaja **tidak** diawasi watchdog: dialah yang menanggung penantian lock esp-mqtt saat link tercekik |
 | `wifi_mgr` | — (dipanggil dari `loop()`) | Station WiFi, `country code "ID"`, reconnect exponential backoff (tidak blocking boot) |
 | `state.h` (`g_state`) | — | `BessData` + `seq` tunggal, dilindungi mutex (`stateLock`/`stateUnlock`) — dibaca `task_bess` (tulis) dan `loop()`/`task_cmd` (baca) |
 
@@ -104,6 +105,10 @@ yang baru.
 | `device/<gw>/status` | gateway → cloud | `online`/`offline`, **retained**, `offline` juga jadi LWT |
 | `device/<gw>/command` | cloud → gateway | `{"cmd": ..., "args": {...}}` |
 | `device/<gw>/command/ack` | gateway → cloud (broadcast, semua subscriber) | `{"id","cmd","result","detail","applied","ts"}` |
+| `device/<gw>/ota/manifest` | cloud → gateway | Manifest OTA (sub-proyek G) — lihat §OTA |
+| `device/<gw>/ota/chunk` | cloud → gateway | Potongan firmware base64 (sub-proyek G) |
+| `device/<gw>/ota/ack` | gateway → cloud | Ack manifest/chunk (sub-proyek G) |
+| `device/<gw>/ota/status` | gateway → cloud | **Retained** — status job OTA (sub-proyek G) |
 
 ### Contoh payload telemetri (dipersingkat)
 
@@ -116,7 +121,7 @@ yang baru.
   "data": {
     "device_type": "bess",
     "api_schema_version": 1,
-    "firmware_version": "bess-0.2.0",
+    "firmware_version": "bess-0.3.0",
     "device_id": "58E6C5218C78",
     "uptime_ms": 723004,
     "time_valid": true,
@@ -139,7 +144,8 @@ yang baru.
       "grid_connected": true, "epo": false, "comm_lost": false,
       "alarms_decoded": { "positive_bus_overvoltage": 0, "...": 0 },
       "status_decoded": { "running": 1, "dc_relay": 1, "ac_relay": 1, "...": 0 }
-    }
+    },
+    "ota": {"state": "idle", "id": "", "running_partition": "app0", "pending_verify": false}
   }
 }
 ```
@@ -232,6 +238,7 @@ Alasan tolak (`detail`):
 | `readback_mismatch` | `set_output`/`set_power` tertulis tapi nilai baca-balik dari register tidak cocok dengan yang ditulis |
 | `queue_full` | antrean perintah penuh; perintah tidak dijalankan, silakan kirim ulang |
 | `payload_too_large` | payload command > 2048 B (`CMD_JSON_MAX`); `id` di ack kosong karena pesan tak di-parse |
+| `ota_in_progress` | job OTA (sub-proyek G) sedang aktif — command biasa ditolak sampai job selesai/gagal, lihat §OTA |
 
 `applied` kosong (`{}`) untuk `enable`/`disable`; untuk `set_output`/`set_power` sukses
 berisi `power_pct` (persen rated yang benar-benar tertulis) dan `power_w` (setara watt).
@@ -254,7 +261,159 @@ selalu dicoba penuh walau device diam; itu juga menahan bus dari `task_cmd` samp
 ~7,2 dtk per siklus.) Tim cloud yang menyetel timeout command dari angka ini cukup
 memakai **~10 dtk** untuk deteksi putus, ditambah ≤10 dtk tunggu bukti status.
 
+## OTA gateway (MQTT, Ed25519)
+
+Sub-proyek G. Update firmware gateway sendiri (bukan BESS) lewat MQTT dengan
+tanda tangan Ed25519 -- **satu-satunya** jalur OTA (tidak ada endpoint HTTP
+`/update`; jalur tanpa tanda tangan berarti melewati verifikasi). Paritas
+kontrak dengan `BEPESP32_WiFi_Extension` (branch `gateway-mqtt`) KECUALI
+`image_type`/`hardware`, yang sengaja dibedakan.
+
+| Topic | QoS | Retained | Arah |
+|---|---|---|---|
+| `device/<gw>/ota/manifest` | 1 | tidak | cloud → gateway |
+| `device/<gw>/ota/chunk` | 1 | tidak | cloud → gateway |
+| `device/<gw>/ota/ack` | 1 | tidak | gateway → cloud |
+| `device/<gw>/ota/status` | 1 | **ya** | gateway → cloud |
+
+### Manifest
+
+```json
+{"id":"ota-20260923-001","image_type":"gateway","hardware":"bep-gateway-bess-v1",
+ "version":"bess-0.3.1","encoding":"base64","image_size":1245184,
+ "sha256":"<64 hex char>","signature":"<base64, 64 byte Ed25519 detached>",
+ "chunk_count":1081}
+```
+
+Validasi (`lib/bess_core/ota_logic.cpp::otaParseManifest`, native-tested):
+`id` non-kosong ≤128 char; `image_type=="gateway"` **dan**
+`hardware=="bep-gateway-bess-v1"` (mismatch → `hardware_mismatch`, dicek
+SEBELUM field lain -- lihat "Kenapa hardware berbeda" di bawah);
+`encoding=="base64"`; `image_size` 1..`0x1E0000` (ukuran satu slot app OTA);
+`sha256` persis 64 hex char; `signature` base64 yang men-decode ke **persis**
+64 byte; `chunk_count == ceil(image_size / 1152)` **persis**. Field lain
+invalid → `invalid_manifest`.
+
+**Tanda tangan**: Ed25519 detached atas **32 byte digest SHA-256 biner**
+(bukan manifest JSON, bukan image mentah) — `sha256` di-decode ke biner,
+itulah pesan yang diverifikasi. Diverifikasi dengan libsodium
+(`crypto_sign_verify_detached`, `src/task_ota.cpp`) **SEBELUM** `esp_ota_begin`
+dipanggil sama sekali -- gagal verifikasi = tidak ada satu byte pun ditulis
+ke flash. Public key 32 byte dari `OTA_ED25519_PUBKEY_B64` (`config.h`,
+default kunci tim, bisa ditimpa di `secrets.h` untuk bench — lihat
+`secrets.example.h`).
+
+**Kenapa `hardware` berbeda dari kontrak tim** (`"bep-gateway-bess-v1"` vs
+`"bep-gateway-v1"` milik gateway DCON): papan fisik ESP32-C6 **identik**
+antara gateway DCON dan gateway BESS. Tanpa pembeda ini, image firmware
+DCON-gateway yang ditandatangani sah oleh kunci yang sama bisa ter-flash ke
+gateway BESS (dan sebaliknya) hanya karena tanda tangannya valid — mismatch
+sengaja ditolak lebih dulu dari validasi field lain.
+
+### Chunk
+
+```json
+{"id":"ota-20260923-001","index":0,"data":"<base64, maks 1536 char>"}
+```
+
+Base64 ≤1536 char → biner ≤1152 byte (muat dalam `MQTT_READ_BUFFER`=2048
+bersama envelope JSON). **Wajib berurutan dari index 0**, satu chunk
+in-flight (server kirim berikutnya HANYA setelah ack `accepted`). Duplikat
+index terakhir (retry aman QoS1) → `accepted`/`duplicate` (idempotent, tidak
+ditulis ulang). Index lebih lama dari itu → `stale_chunk`; melompat maju /
+job sudah penuh → `unexpected_chunk`; `id` tidak cocok job aktif (atau tidak
+ada job aktif) → `wrong_job`. Setiap chunk **baru** langsung ditulis ke
+partisi (`esp_ota_write`) dan di-hash inkremental (mbedTLS `mbedtls_sha256_*`)
+— **tidak ada image penuh di RAM**.
+
+**Deviasi dari kontrak tim** (tidak didaftarkan eksplisit di dokumentasi
+mereka): amplop chunk yang tidak bisa diurai sama sekali (JSON rusak, atau
+field `id`/`index`/`data` hilang) dipetakan ke `unexpected_chunk` juga — job
+mana yang dimaksud tidak diketahui pasti dalam kasus ini, jadi ini nilai
+`detail` paling umum yang tersedia, bukan kegagalan job.
+
+Base64 rusak / mendekode ke ukuran salah, atau `esp_ota_write` gagal → **job
+langsung gagal** (`invalid_chunk_data` / `write_failed`), bukan sekadar
+menolak chunk itu — harus dimulai ulang dari manifest baru.
+
+### Ack & status
+
+```json
+// ack manifest
+{"id":"ota-20260923-001","kind":"manifest","result":"accepted","detail":"","ts":1785480000}
+// ack chunk
+{"id":"ota-20260923-001","kind":"chunk","index":0,"result":"accepted","detail":"",
+ "received_bytes":1152,"next_index":1,"ts":1785480000}
+// status (retained)
+{"id":"ota-20260923-001","state":"downloading","image_type":"gateway",
+ "hardware":"bep-gateway-bess-v1","gateway_id":"58E6C5218C78",
+ "gateway_firmware_version":"bess-0.3.1","running_gateway_firmware_version":"bess-0.3.0",
+ "running_partition":"app0","sha256":"...","received_bytes":1152,"detail":"","ts":1785480000}
+```
+
+`kind` = `"manifest"` (tanpa `index`/`received_bytes`/`next_index`, field itu
+hanya relevan untuk kemajuan per-chunk) atau `"chunk"`. `detail` ringkasan
+alasan: `""` (sukses biasa), `invalid_manifest`, `hardware_mismatch`,
+`signature_invalid`, `ota_begin_failed`, `busy` (manifest kedua saat job
+aktif — **tanpa publish status**), `duplicate`, `unexpected_chunk`,
+`stale_chunk`, `wrong_job`, `invalid_chunk_data`, `write_failed`,
+`size_mismatch`, `sha256_mismatch`, `timeout` (120 dtk tanpa chunk baru),
+`boot_partition_mismatch` (lihat rollback).
+
+`state` (status, retained): `idle → downloading → verifying → restarting →
+installed|failed`. Urutan finalisasi setelah chunk terakhir: cek
+`received_bytes==image_size` → hitung SHA-256 final vs manifest → `verifying`
+→ `esp_ota_end` + `esp_ota_set_boot_partition` → simpan `{id,version,sha256,
+partition}` ke NVS `mqtt_ota` → `restarting` → **reboot 1 detik kemudian**.
+
+### Rollback otomatis
+
+Bootloader sudah `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` (bawaan pioarduino
+53.03.13, terverifikasi di `sdkconfig` framework). Firmware meng-override
+`verifyRollbackLater()` (symbol weak `esp32-hal-misc.c`, **wajib** `extern
+"C"` di sisi kita) supaya image baru boot dalam status `PENDING_VERIFY` dan
+**baru** ditandai valid (`esp_ota_mark_app_valid_cancel_rollback`) saat MQTT
+tersambung **pertama kali** pasca-boot. Crash/reboot sebelum itu → bootloader
+otomatis kembali ke image lama di boot berikutnya. Kalau **15 menit** tak
+kunjung tersambung sama sekali sementara masih `PENDING_VERIFY`, firmware
+menandai dirinya invalid dan reboot paksa ke image lama
+(`esp_ota_mark_app_invalid_rollback_and_reboot`).
+
+Setelah reconnect (boot mana pun, bukan cuma pasca-OTA), status persisted
+dipublikasikan **sekali** dari NVS `mqtt_ota`: `installed` kalau partisi yang
+sedang berjalan == yang disimpan sebelum reboot, `failed`/
+`boot_partition_mismatch` kalau tidak (rollback terjadi). Ditandai `reported`
+di NVS supaya tidak terulang tiap reconnect dalam boot yang sama (status
+tetap **retained** di broker untuk subscriber baru).
+
+### `data.ota` (telemetri)
+
+```json
+"ota": {"state": "downloading", "id": "ota-20260923-001", "running_partition": "app0", "pending_verify": false}
+```
+
+`state` sama dengan enum status MQTT. `pending_verify` = image yang sedang
+berjalan masih menunggu mark-valid (rollback masih aktif).
+
+### Bench (tanpa hardware asli)
+
+```bash
+# sekali: buat keypair dev (JANGAN pakai kunci tim untuk bench sembarangan)
+cd bess-sim
+uv run --with cryptography python tools/ota_publish.py --gen-key dev_key.pem
+# tempel public key yang dicetak ke firmware/src/secrets.h:
+#   #define OTA_ED25519_PUBKEY_B64 "<hasil --gen-key>"
+
+# kirim firmware.bin ke gateway
+uv run --with paho-mqtt --with cryptography python tools/ota_publish.py \
+    --gw 58E6C5218C78 --host mqtt-dev.bepbatt.id --user USER --passwd PASS \
+    --key dev_key.pem --version bess-0.3.1 --firmware .pio/build/esp32c6/firmware.bin
+```
+
+Belum diuji di hardware fisik (lihat `CHANGELOG.md` untuk checklist bench
+yang masih wajib sebelum dipakai di lapangan).
+
 ## Non-scope fase ini
 
-Provisioning/captive portal, OTA, dashboard web lokal, auto-control SOC,
+Provisioning/captive portal, dashboard web lokal, auto-control SOC,
 fault-history ring buffer, TLS 8883 produksi (bench pakai broker dev `1883` polos).
