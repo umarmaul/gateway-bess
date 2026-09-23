@@ -255,4 +255,27 @@ void webInit() {
     Serial.println("[web] server HTTP mulai (port 80)");
 }
 
-void webTick() { s_server.handleClient(); }
+// ---------------------------------------------------------------------------
+// task_web -- handleClient() dipindah dari loop() ke task sendiri, SENGAJA
+// TIDAK didaftarkan ke task watchdog (lihat catatan panjang di web.h: klien
+// slowloris bisa menahan WebServer::_parseRequest() lama sebelum handler
+// mana pun dipanggil). Prioritas 1 (sama dengan loop()/mqtt_tx) -- web
+// server bukan jalur real-time, tidak boleh menyita CPU dari task_bess (3)
+// atau task_cmd (2).
+// ---------------------------------------------------------------------------
+static TaskHandle_t s_web_task = nullptr;
+
+static void webTaskRun(void*) {
+    for (;;) {
+        s_server.handleClient();
+        // handleClient() sendiri sudah blocking/menunggu selama ada koneksi
+        // aktif -- delay pendek ini hanya supaya task idle (tanpa klien)
+        // tidak busy-spin di prioritas 1.
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+}
+
+void webTaskStart() {
+    xTaskCreate(webTaskRun, "task_web", 8192, nullptr, 1, &s_web_task);
+    Serial.println("[web] task_web dimulai (handleClient, TIDAK diawasi task watchdog -- lihat web.h)");
+}

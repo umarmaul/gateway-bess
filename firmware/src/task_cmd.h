@@ -12,11 +12,16 @@ void taskCmdSubmit(const char* json, size_t n);   // dipanggil dari event MQTT (
 void taskCmdSubmitInternal(const char* json, size_t n);
 
 // sub-proyek H: dipanggil src/web_dashboard.cpp (POST /api/command) DARI
-// loop() -- BUKAN dari task esp-mqtt (taskCmdSubmit, buffer rc_ext) atau
-// task_auto (taskCmdSubmitInternal, buffer rc_int). Buffer statis terpisah
-// (rc_web) supaya ketiga jalur submit aman dipanggil dari task masing-masing
-// tanpa saling menimpa. Command dari web dianggap MANUAL (seperti cloud) --
-// menonaktifkan jadwal, sama seperti taskCmdSubmit (lihat schedule.h).
+// task_web (lihat web.h/web.cpp -- SEBELUM temuan review 23 Sep 2026 ini
+// dipanggil dari loop(), sekarang handleClient() punya task sendiri) --
+// BUKAN dari task esp-mqtt (taskCmdSubmit, buffer rc_ext) atau task_auto
+// (taskCmdSubmitInternal, buffer rc_int). Buffer statis terpisah (rc_web)
+// supaya ketiga jalur submit aman dipanggil dari task masing-masing tanpa
+// saling menimpa -- invariant ini masih berlaku sama persis: task_web
+// SATU-SATUNYA pemanggil taskCmdSubmitWeb (WebServer bawaan memproses satu
+// koneksi per handleClient(), jadi tetap satu pemanggil pada satu waktu).
+// Command dari web dianggap MANUAL (seperti cloud) -- menonaktifkan jadwal,
+// sama seperti taskCmdSubmit (lihat schedule.h).
 //
 // Beda dari dua jalur lain: mengembalikan HASIL seketika (true = masuk
 // antrean utama) karena HTTP punya respons sinkron yang bisa memberi tahu

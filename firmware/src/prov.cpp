@@ -44,6 +44,30 @@ static bool s_reset_triggered = false;
 static bool s_reboot_pending = false;
 static uint32_t s_reboot_at_ms = 0;
 
+// ---------------------------------------------------------------------------
+// TEMUAN REVIEW 23 Sep 2026: sebelum handleClient() dipindah ke task_web
+// (lihat web.h), SEMUA handler HTTP di web.cpp berjalan di loop() -- task
+// YANG SAMA dengan provTick() -- jadi akses tanpa lock ke state di bawah ini
+// aman (satu task, tidak pernah tumpang tindih). Sekarang handler HTTP bisa
+// berjalan BERSAMAAN dengan provTick() (task berbeda), jadi field yang
+// ditulis salah satu dan dibaca yang lain butuh mutex:
+//   - s_ap_active/s_ap_ssid/s_ap_pass: ditulis provTick() (toggle AP) DAN
+//     provSaveAp() (handler HTTP web.cpp, sekarang task_web); dibaca
+//     provTick() (WiFi.softAP()) DAN provApActive()/provApSsid() (task_web,
+//     fillSysInfo dari task_web/loop()).
+//   - s_mdns_host: ditulis provSaveWifi() (task_web) DAN dibaca provTick()
+//     (MDNS.begin()) serta provMdnsHostname() (task_web, fillSysInfo).
+//   - s_reboot_pending/s_reboot_at_ms: SEPASANG (dibaca bersamaan di
+//     provTick()) -- ditulis provScheduleReboot() (dipanggil handler HTTP
+//     web.cpp, sekarang task_web), dibaca provTick() (loop()).
+// s_gw_code (write-once di provInit(), SEBELUM task_web ada) dan
+// s_sta_ssid/s_sta_pass/s_sta_static/IP statis (ditulis provSaveWifi()/
+// provForgetWifi() tapi HANYA DIBACA sekali di main.cpp::setup(), juga
+// SEBELUM task_web dibuat -- lihat wifiInit(provStaSsid(), provStaPass()))
+// SENGAJA tidak dikunci -- tidak ada pembaca setelah task_web berjalan.
+// ---------------------------------------------------------------------------
+static SemaphoreHandle_t s_mtx = nullptr;
+
 static uint32_t espRand32() { return esp_random(); }
 
 static void defaultApSsid(char out[40]) {
@@ -54,6 +78,7 @@ static void defaultApSsid(char out[40]) {
 // provInit — dipanggil sekali di setup(), SEBELUM wifiInit()
 // ---------------------------------------------------------------------------
 void provInit() {
+    s_mtx = xSemaphoreCreateMutex();   // lihat catatan thread-safety di atas
     pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
 
     // gateway_code: dibangkitkan sekali, dipertahankan lintas reboot (NVS
@@ -148,13 +173,23 @@ void provTick() {
     s_prev_connected = connected;
     uint32_t ms_since = connected ? (millis() - s_connected_since_ms) : 0;
     bool want_ap = provApShouldBeOn(connected, ms_since, PROV_AP_AFTER_CONNECT_MS);
-    if (want_ap != s_ap_active) {
-        s_ap_active = want_ap;
+    // s_ap_ssid/s_ap_pass disalin ke lokal DI BAWAH LOCK sebelum dipakai di luar
+    // lock (WiFi.softAP() dkk tak perlu menahan mutex) -- provSaveAp() (task_web)
+    // bisa menulis keduanya bersamaan (lihat catatan thread-safety di atas).
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    bool was_active = s_ap_active;
+    bool changing = want_ap != was_active;
+    if (changing) s_ap_active = want_ap;
+    char ap_ssid[40], ap_pass[64];
+    strncpy(ap_ssid, s_ap_ssid, sizeof(ap_ssid) - 1); ap_ssid[sizeof(ap_ssid) - 1] = 0;
+    strncpy(ap_pass, s_ap_pass, sizeof(ap_pass) - 1); ap_pass[sizeof(ap_pass) - 1] = 0;
+    xSemaphoreGive(s_mtx);
+    if (changing) {
         if (want_ap) {
             WiFi.mode(WIFI_AP_STA);
-            WiFi.softAP(s_ap_ssid, s_ap_pass);
+            WiFi.softAP(ap_ssid, ap_pass);
             s_dns.start(53, "*", WiFi.softAPIP());
-            Serial.printf("[prov] AP fallback ON: %s ip=%s\n", s_ap_ssid,
+            Serial.printf("[prov] AP fallback ON: %s ip=%s\n", ap_ssid,
                           WiFi.softAPIP().toString().c_str());
         } else {
             s_dns.stop();
@@ -163,15 +198,20 @@ void provTick() {
             Serial.println("[prov] AP fallback OFF (STA stabil > 5 menit)");
         }
     }
-    if (s_ap_active) s_dns.processNextRequest();
+    if (want_ap) s_dns.processNextRequest();
 
     // ---- mDNS: retry MDNS.begin() tiap PROV_MDNS_RETRY_MS selama STA connected ----
     if (connected) {
         if (!s_mdns_started && timeAfter(millis(), s_mdns_next_try_ms)) {
-            if (MDNS.begin(s_mdns_host)) {
+            char mdns_host[64];
+            xSemaphoreTake(s_mtx, portMAX_DELAY);
+            strncpy(mdns_host, s_mdns_host, sizeof(mdns_host) - 1);
+            xSemaphoreGive(s_mtx);
+            mdns_host[sizeof(mdns_host) - 1] = 0;
+            if (MDNS.begin(mdns_host)) {
                 MDNS.addService("http", "tcp", 80);
                 s_mdns_started = true;
-                Serial.printf("[prov] mDNS aktif: %s.local\n", s_mdns_host);
+                Serial.printf("[prov] mDNS aktif: %s.local\n", mdns_host);
             } else {
                 Serial.println("[prov] MDNS.begin gagal -- coba lagi 5 dtk");
             }
@@ -202,7 +242,15 @@ void provTick() {
     }
 
     // ---- reboot terjadwal (pasca simpan config via HTTP) ----
-    if (s_reboot_pending && timeAfter(millis(), s_reboot_at_ms)) {
+    // Dibaca sebagai PASANGAN di bawah lock -- provScheduleReboot() (dipanggil
+    // handler HTTP, sekarang task_web) menulis keduanya; tanpa lock, provTick()
+    // bisa melihat s_reboot_pending sudah true tapi s_reboot_at_ms masih nilai
+    // lama (dari panggilan schedule SEBELUMNYA, kalau ada) sebelum tertulis.
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    bool reboot_pending = s_reboot_pending;
+    uint32_t reboot_at_ms = s_reboot_at_ms;
+    xSemaphoreGive(s_mtx);
+    if (reboot_pending && timeAfter(millis(), reboot_at_ms)) {
         Serial.println("[prov] reboot (config WiFi berubah)");
         delay(50);
         esp_restart();
@@ -219,7 +267,24 @@ ProvStaticIp provStaticIp() {
     return r;
 }
 
-bool provApActive() { return s_ap_active; }
+bool provApActive() {
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    bool v = s_ap_active;
+    xSemaphoreGive(s_mtx);
+    return v;
+}
+// provMdnsHostname()/provApSsid() mengembalikan POINTER ke buffer modul (bukan
+// salinan) -- panggilan ini sendiri tidak dikunci karena mengunci lalu
+// mengembalikan pointer ke luar critical section tidak benar-benar menghapus
+// risiko robek (caller bisa membaca buffer SAAT provSaveWifi()/provSaveAp()
+// (task_web) sedang menulisnya lewat strncpy). Risiko ini SEMPIT (hanya
+// selama ~1 dtk provScheduleReboot() sebelum esp_restart(), lihat
+// provSaveWifi/provSaveAp) dan HANYA kosmetik (tampilan /wifi atau field
+// data.network.mdns di satu payload telemetri/​dashboard, bukan apa pun yang
+// memengaruhi keselamatan BESS/Modbus) -- didokumentasikan di README
+// (§Kerangka web server) sebagai residual risk, bukan diperbaiki dengan
+// mengubah SysInfo.mdns/payload.h (kontrak MQTT dipakai native test, di luar
+// lingkup temuan task_web ini).
 const char* provMdnsHostname() { return s_mdns_host; }
 const char* provApSsid() { return s_ap_ssid; }
 const char* provGatewayCode() { return s_gw_code; }
@@ -272,7 +337,11 @@ ProvResult provSaveWifi(const char* ssid, const char* pass, const char* mdns,
 
     strncpy(s_sta_ssid, ssid, sizeof(s_sta_ssid) - 1); s_sta_ssid[sizeof(s_sta_ssid) - 1] = 0;
     strncpy(s_sta_pass, pass, sizeof(s_sta_pass) - 1); s_sta_pass[sizeof(s_sta_pass) - 1] = 0;
+    // s_mdns_host dikunci: dibaca provTick()/provMdnsHostname() dari task lain
+    // (lihat catatan thread-safety di atas).
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
     strncpy(s_mdns_host, mdns, sizeof(s_mdns_host) - 1); s_mdns_host[sizeof(s_mdns_host) - 1] = 0;
+    xSemaphoreGive(s_mtx);
     s_sta_static = sta_static;
     if (sta_static) {
         s_sta_ip = IPAddress(a_ip[0], a_ip[1], a_ip[2], a_ip[3]);
@@ -299,8 +368,12 @@ ProvResult provSaveAp(const char* ap_ssid, const char* ap_pass) {
     p.putString("ap_pass", ap_pass);
     p.end();
 
+    // s_ap_ssid/s_ap_pass dikunci: dibaca provTick() (WiFi.softAP()) dari
+    // loop() -- task berbeda dari task_web (lihat catatan thread-safety).
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
     if (has_ssid) { strncpy(s_ap_ssid, ap_ssid, sizeof(s_ap_ssid) - 1); s_ap_ssid[sizeof(s_ap_ssid) - 1] = 0; }
     strncpy(s_ap_pass, ap_pass, sizeof(s_ap_pass) - 1); s_ap_pass[sizeof(s_ap_pass) - 1] = 0;
+    xSemaphoreGive(s_mtx);
     Serial.printf("[prov] AP config disimpan: ap_ssid=%s\n", s_ap_ssid);
     return ProvResult::OK;
 }
@@ -318,6 +391,11 @@ void provForgetWifi() {
 }
 
 void provScheduleReboot(uint32_t delay_ms) {
+    // Dikunci: ditulis dari handler HTTP (task_web sejak temuan review 23 Sep
+    // 2026), dibaca sebagai PASANGAN oleh provTick() (loop()) -- lihat catatan
+    // thread-safety di atas dan blok "reboot terjadwal" di provTick().
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
     s_reboot_pending = true;
     s_reboot_at_ms = millis() + delay_ms;
+    xSemaphoreGive(s_mtx);
 }

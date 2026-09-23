@@ -76,7 +76,11 @@ berurutan, bukan paralel).
   akan bentrok nama), `_http._tcp:80`.
 - Factory reset: tombol BOOT (GPIO9) ditahan 8 dtk → hapus NVS `wifi_cfg` + `app_cfg`, reboot
   (identitas `device_id`, `mqtt_ota`, `boot`, `crash` dipertahankan).
-- Web server: `WebServer` sinkron bawaan core (seperti tim), `handleClient()` di `loop()`.
+- Web server: `WebServer` sinkron bawaan core (seperti tim). **Update review 23 Sep 2026**:
+  `handleClient()` dipindah dari `loop()` ke task sendiri (`task_web`, TIDAK diawasi task
+  watchdog) -- library core menunggu body POST tanpa batas waktu total (slowloris bisa
+  memicu panic TASK_WDT kalau dijalankan di `loop()`). Lihat `firmware/README.md`
+  §Kerangka web server.
 
 ## F. Jadwal + auto-control SOC
 
@@ -92,9 +96,12 @@ berurutan, bukan paralel).
     comm_lost) di telemetri.
   - **Jadwal = instruksi eksplisit dari cloud/operator**, jadi mengeksekusinya bukan keputusan
     otonom: saat masuk window (dan waktu NTP valid, tak fault, tak comm_lost, SOC ≥ recovery)
-    gateway menulis `power_w` lalu `enable`; saat keluar window → `disable`. Sekali per
-    transisi (edge), bukan tiap siklus — operator bisa mematikan di tengah window tanpa
-    dinyalakan ulang terus-menerus.
+    gateway menulis `power_w` lalu `enable`; saat keluar window → `disable`. **ENABLE paling
+    banyak sekali per window** (update review 23 Sep 2026): kalau syarat belum terpenuhi
+    tepat saat masuk window, gateway menandai *pending* dan mencoba lagi tiap siklus (~5 dtk)
+    selama masih di window yang sama — begitu syarat terpenuhi, `enable` langsung jalan;
+    setelah `enable` berhasil sekali, tidak dicoba lagi sampai window berikutnya, jadi
+    operator tetap bisa mematikan BESS manual di tengah window tanpa dinyalakan ulang.
   - Command manual `enable`/`disable`/`set_output` **menonaktifkan jadwal** (paritas tim:
     campur tangan manual menang sampai jadwal diset ulang).
   - Waktu belum sinkron (`ts==0`) → jadwal tidak bertindak sama sekali.

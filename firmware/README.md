@@ -81,12 +81,13 @@ muncul sekali dan ringkasannya ikut telemetri sebagai `last_crash`:
 | `task_bess` (`task_bess.cpp`) | 3 | Poll Modbus BESS tiap `POLL_PERIOD_MS` (1,5 dtk): telemetri `1050..1108` → alarm `2050..2057` → setpoint `3050` → param `3146..3184`; decode ke `BessData`; tandai `comm_lost` setelah `COMM_LOST_AFTER`=3 siklus gagal beruntun |
 | `task_cmd` (`task_cmd.cpp`) | 2 | Antrian command dari MQTT (`taskCmdSubmit`); eksekusi `enable`/`disable`/`set_output` (alias `set_power`) via Modbus, tunggu bukti nyata (bit status atau readback), kirim ack. Menolak semua command dengan `ota_in_progress` selama job OTA aktif |
 | `task_ota` (`task_ota.cpp`) | 2 | OTA gateway via MQTT (sub-proyek G) — lihat §OTA di bawah. **Tidak** didaftarkan ke task watchdog (`esp_ota_write` bisa lambat karena erase flash, dan menunggu `mqtt_tx` tidak boleh berujung reboot) |
+| `task_web` (`web.cpp`) | 1 | **Baru (temuan review 23 Sep 2026)**: `handleClient()` untuk SEMUA rute HTTP (E/F/H — `/wifi`, `/api/wifi/*`, `/api/auto/config`, `/`, `/api/data`, `/api/command`, `/api/acks`, `/api/firmware_versions`). **Tidak** didaftarkan ke task watchdog -- `WebServer::_parseRequest()` (library core) membaca body POST tanpa batas waktu total, klien "slowloris" (1 byte tiap <5 dtk) bisa menahannya lama. Lihat §Kerangka web server |
 | `mqtt_link` (`mqtt_link.cpp`) | — (event esp-mqtt) | Start client saat WiFi pertama naik, LWT `device/<gw>/status`, subscribe `device/<gw>/command` + `device/<gw>/ota/{manifest,chunk}`, panggil `otaOnMqttConnected()` tiap `MQTT_EVENT_CONNECTED` |
 | `mqtt_tx` (`mqtt_link.cpp`) | 1 | **Satu-satunya** pemanggil `esp_mqtt_client_enqueue` (QoS1). `loop()` menitip telemetri terbaru (latest wins); `task_cmd`/`task_ota` menitip pesan (`mqttPublish`) ke antrean generik 8 slot `{topic,retain,json}` (ack/ota_ack/ota_status) yang ditahan sampai MQTT terhubung (basi >10 menit dibuang; `retain` per pesan — status OTA retained, ack tidak). Sengaja **tidak** diawasi watchdog: dialah yang menanggung penantian lock esp-mqtt saat link tercekik |
 | `wifi_mgr` | — (dipanggil dari `loop()`) | Station WiFi, `country code "ID"`, reconnect exponential backoff (tidak blocking boot); kredensial disuntikkan `prov.cpp` |
-| `prov` (`prov.cpp`) | — (dipanggil dari `loop()`) | Provisioning (sub-proyek E) — lihat §Provisioning di bawah: gateway_code, SoftAP fallback + captive DNS, mDNS, tombol factory reset, reboot terjadwal |
-| `web` (`web.cpp`) | — (dipanggil dari `loop()`) | `WebServer` sinkron port 80: `/wifi` + `/api/wifi/*` (sub-proyek E); kerangka router untuk F/H |
-| `state.h` (`g_state`) | — | `BessData` + `seq` tunggal, dilindungi mutex (`stateLock`/`stateUnlock`) — dibaca `task_bess` (tulis) dan `loop()`/`task_cmd` (baca) |
+| `prov` (`prov.cpp`) | — (`provTick()` dari `loop()`; accessor dipanggil dari `task_web` juga) | Provisioning (sub-proyek E) — lihat §Provisioning di bawah: gateway_code, SoftAP fallback + captive DNS, mDNS, tombol factory reset, reboot terjadwal. State yang disentuh `loop()` DAN `task_web` (AP aktif/SSID/pass, mDNS hostname, flag reboot terjadwal) dilindungi mutex sejak `task_web` ada (lihat §Kerangka web server) |
+| `web` (`web.cpp`) | — (handler dipanggil dari `task_web`) | `WebServer` sinkron port 80: `/wifi` + `/api/wifi/*` (sub-proyek E); kerangka router untuk F/H |
+| `state.h` (`g_state`) | — | `BessData` + `seq` tunggal, dilindungi mutex (`stateLock`/`stateUnlock`) — dibaca `task_bess` (tulis) dan `loop()`/`task_cmd`/`task_web` (baca) |
 
 Arbitrase bus RS485 tunggal: hanya `task_bess` (poll) dan `task_cmd` (tulis
 command) yang menyentuh `modbus_port`; keduanya lewat fungsi `mbReadRegs`/`mbWrite5`/
@@ -496,13 +497,56 @@ diiklankan (tanpa `.local`).
 ### Kerangka web server (dipakai E/F/H)
 
 `src/web.cpp` mendaftarkan `/wifi` + `/api/wifi/*` (E) dan `/api/auto/config`
-(F) di atas `WebServer` sinkron biasa (`handleClient()` dari `loop()`,
-**harus cepat** -- `loop()` diawasi task watchdog 120 dtk, jangan tunggu lock
-esp-mqtt/Modbus lama). `webServer()` (`web.h`) mengekspos instance
-`WebServer&` supaya modul lain mendaftarkan rute tambahan tanpa membuat
-server sendiri -- `src/web_dashboard.cpp` (H) memakainya untuk `/`,
+(F) di atas `WebServer` sinkron biasa. `webServer()` (`web.h`) mengekspos
+instance `WebServer&` supaya modul lain mendaftarkan rute tambahan tanpa
+membuat server sendiri -- `src/web_dashboard.cpp` (H) memakainya untuk `/`,
 `/api/data`, `/api/command`, `/api/acks`, `/api/firmware_versions` (lihat
 §Dashboard & API lokal di bawah).
+
+**Temuan review 23 Sep 2026 (TINGGI) -- slowloris bisa mereboot gateway,
+diperbaiki dengan `task_web`.** `WebServer::_parseRequest()` (library core,
+`framework-arduinoespressif32/libraries/WebServer/src/Parsing.cpp`) membaca
+body POST lewat `readBytesWithTimeout()` SEBELUM handler mana pun dipanggil
+(dan sebelum cek apa pun) -- fungsi itu me-reset jatah tunggunya
+(`HTTP_MAX_POST_WAIT`, default **5000 ms**) setiap kali satu byte baru tiba.
+Klien yang sengaja mengirim body 1 byte tiap <5 dtk ("slowloris") bisa
+menahan `handleClient()` menggantung nyaris tanpa batas. Dulu ini dipanggil
+dari `loop()` (diawasi task watchdog `WDT_TIMEOUT_S`=120 dtk) -- klien
+seperti itu memicu panic `TASK_WDT` → **reboot seluruh gateway**, walau tidak
+ada yang salah di jalur BESS/MQTT.
+
+Fix: `handleClient()` sekarang dipanggil dari task terpisah, **`task_web`**
+(`webTaskStart()`, prioritas 1), yang **SENGAJA TIDAK didaftarkan ke task
+watchdog** -- pola sama dengan `task_ota`/`mqtt_tx` (keduanya juga
+dikecualikan karena bisa menunggu lama di luar kendali kode kita). `loop()`
+**tidak lagi** memanggil `webTick()`/`handleClient()` sama sekali.
+
+`-DHTTP_MAX_POST_WAIT=2000` **TIDAK** ditambahkan ke `build_flags` --
+dicek dulu di `WebServer.h` milik framework, dan define itu **TIDAK**
+dibungkus `#ifndef` (beda dari define lain seperti `OTA_ED25519_PUBKEY_B64`),
+jadi menimpanya lewat `-D` akan menabrak (macro redefinition) alih-alih
+menang bersih. Tidak dipaksakan -- dicatat di sini saja.
+
+Residual risk (setelah fix, TIDAK lagi bisa mereboot gateway):
+1. **Satu koneksi lambat masih bisa membuat server HTTP itu sendiri (satu
+   koneksi diproses per `handleClient()`) tak responsif sementara** untuk
+   klien LAIN yang mencoba mengakses dashboard/API di waktu yang sama --
+   tapi BESS/Modbus (`task_bess`/`task_cmd`), MQTT (`mqtt_tx`/`mqtt_link`),
+   dan command tetap berjalan normal di task-task lain, tidak terpengaruh.
+2. **Body yang dikirim CEPAT (bukan slowloris) tetap memakan heap
+   sementara** selama request diproses -- `readBytesWithTimeout()` di
+   library core mem-`malloc`/`realloc` seluruh body sebelum handler
+   dipanggil, dibatasi hanya oleh `Content-Length` yang dikirim klien
+   sendiri (tidak ada guard tambahan di luar itu di kode kami).
+3. **`prov.cpp` (state provisioning yang dibaca `task_web` DAN `loop()`
+   sekaligus -- AP aktif/SSID/password, hostname mDNS, flag reboot
+   terjadwal) sekarang dilindungi mutex** (audit thread-safety, lihat
+   commit terkait) -- KECUALI dua accessor pointer `provMdnsHostname()`/
+   `provApSsid()` yang tetap bisa membaca string yang SEDANG ditulis
+   `provSaveWifi()`/`provSaveAp()` (jendela ~1 dtk sebelum
+   `provScheduleReboot()` benar-benar reboot) -- murni kosmetik (tampilan
+   `/wifi` atau `data.network.mdns` sesaat), tidak memengaruhi keselamatan
+   BESS/Modbus. Lihat komentar di `src/prov.cpp`.
 
 ## Jadwal + auto-control SOC
 
@@ -510,7 +554,7 @@ Sub-proyek F (spec `docs/superpowers/specs/2026-09-23-subproyek-EFGH-design.md`
 §F). Satu window harian per gateway (bukan array jadwal), disimpan NVS
 `app_cfg` (namespace yang sama dihapus tombol factory reset di §Provisioning).
 Logika murni (parsing, clamp, evaluasi window, keputusan) ada di
-`lib/bess_core/sched_logic.*` -- 28 test native mencakup lintas tengah
+`lib/bess_core/sched_logic.*` -- 33 test native mencakup lintas tengah
 malam, tz, waktu belum sinkron, dan tabel kasus edge/retry di bawah.
 
 ### Kebijakan (menyelaraskan keputusan owner 23 Juli, gateway-v2: "gateway
@@ -527,15 +571,28 @@ tak pernah auto-enable sendiri")
   Bertindak **hanya** kalau `enabled=true` **dan** jam gateway sudah
   tersinkron NTP (`ts != 0`) -- sebelum itu, jadwal **tidak bertindak sama
   sekali** (tidak ENABLE, tidak DISABLE).
-- Aksi jadwal terjadi **sekali per transisi window (edge)**, bukan tiap
-  siklus evaluasi (~5 dtk) -- operator boleh mematikan BESS manual di
-  tengah window tanpa dinyalakan ulang terus-menerus oleh gateway.
+- **ENABLE terjadi PALING BANYAK SEKALI per window** (TEMUAN REVIEW 23 Sep
+  2026, RENDAH, menggantikan perilaku lama "gagal syarat saat edge tidak
+  pernah di-retry sampai window berikutnya") -- operator tetap boleh
+  mematikan BESS manual di tengah window tanpa dinyalakan ulang oleh
+  gateway, TAPI kegagalan syarat (fault/comm_lost/SOC di bawah recovery)
+  tepat saat window baru mulai **sekarang dicoba lagi tiap siklus (~5 dtk)**
+  selama masih di window yang sama, bukan dibuang sampai window berikutnya.
   - **Edge masuk window**: kalau `soc_percent >= soc_recovery_pct` **dan**
     tidak `fault` **dan** tidak `comm_lost` → `set_output power_w` lalu
-    `enable`. Kalau syarat itu GAGAL tepat saat edge (mis. fault sedang
-    aktif), gateway **tidak retry** sampai window ini berakhir dan window
-    berikutnya dimulai -- bukan dicoba ulang tiap 5 detik.
-  - **Edge keluar window**: `disable`, tanpa syarat tambahan.
+    `enable`. Kalau syarat itu GAGAL tepat saat edge, gateway menandai
+    **pending** dan mengevaluasi ulang syarat itu tiap siklus berikutnya
+    SELAMA masih di window yang sama -- begitu syarat terpenuhi (mis. SOC
+    naik melewati `soc_recovery_pct`, atau fault/comm_lost pulih),
+    `set_output power_w` + `enable` langsung dijalankan saat itu juga.
+    Setelah ENABLE berhasil sekali (langsung di edge atau lewat retry),
+    **tidak ada ENABLE lagi** dalam window yang sama -- ini yang menjaga
+    "operator mematikan manual di tengah window tidak dinyalakan ulang".
+  - **Edge keluar window**: `disable`, tanpa syarat tambahan, dan
+    menghapus status pending (kalau belum sempat enable sama sekali).
+  - **Proteksi SOC (poin pertama) yang memicu DISABLE** juga menghapus
+    status pending -- BESS yang baru dipaksa mati karena SOC rendah tidak
+    langsung dicoba dinyalakan lagi oleh jadwal di siklus berikutnya.
 - `battery_ready` (juga muncul di `data.auto`) = `soc_percent >=
   soc_recovery_pct` **dan** tidak fault **dan** tidak comm_lost -- independen
   dari jadwal aktif atau tidak, dipakai operator/cloud sebagai indikator
@@ -691,9 +748,10 @@ Balasan sinkron HANYA konfirmasi "masuk antrean" -- hasil eksekusi
 sebenarnya (`accepted`/`rejected`/`clamped`/`timeout` + `detail`) tetap
 lewat jalur ack yang SAMA dengan command MQTT (topic
 `device/<gw>/command/ack` + ring buffer `GET /api/acks`), karena eksekusi
-command (tulis Modbus, tunggu bukti status sampai 10 dtk) tidak boleh
-memblokir handler HTTP itu sendiri (`loop()` diawasi task watchdog 120
-dtk -- lihat catatan di `web.h`).
+command (tulis Modbus, tunggu bukti status sampai 10 dtk) dijalankan di
+`task_cmd`, bukan di handler HTTP itu sendiri -- handler `/api/command`
+hanya menitipkan command ke antrean lalu balas seketika (lihat §Kerangka
+web server untuk `task_web`, task tempat handler HTTP ini berjalan).
 
 Kode status:
 - `202` -- masuk antrean (`{"queued":true,"id":...}`). **Belum tentu**

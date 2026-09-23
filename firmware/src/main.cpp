@@ -94,6 +94,7 @@ void setup() {
     taskBessStart();
     webInit();                  // /wifi + /api/wifi/* (sub-proyek E)
     webDashboardInit();         // "/" + /api/data + /api/acks + /api/command + /api/firmware_versions (sub-proyek H)
+    webTaskStart();              // task_web: handleClient() -- SETELAH semua rute terdaftar (lihat web.h)
 
     static char gw[13];
     wifiGw(gw);
@@ -109,7 +110,10 @@ void loop() {
     esp_task_wdt_reset();
     wifiTick();
     provTick();      // AP fallback + captive DNS + mDNS + tombol factory reset + reboot terjadwal
-    webTick();       // /wifi + /api/wifi/* (cepat -- lihat catatan watchdog di web.h)
+    // webTick() TIDAK LAGI dipanggil di sini -- handleClient() sekarang
+    // berjalan di task_web sendiri, TANPA watchdog (temuan review 23 Sep
+    // 2026, lihat web.h). loop() tetap diawasi WDT_TIMEOUT_S, jadi HARUS
+    // tetap bebas dari apa pun yang bisa menggantung selama itu.
     mqttTick(wifiConnected());
     digitalWrite(PIN_LED_WIFI, wifiConnected() ? HIGH : LOW);
     static uint32_t last = 0;
