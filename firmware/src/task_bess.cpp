@@ -9,24 +9,32 @@
 static void pollOnce(bool& ok) {
     uint16_t telem[REG_TELEM_COUNT], alst[REG_ALARM_COUNT], pset[1],
              param[REG_PARAM_COUNT];
-    uint8_t exc = 0;
-    struct { const char* nama; MbStatus st; uint8_t exc; } blok[4];
-    blok[0] = {"telem", mbReadRegs(BESS_NODE, REG_TELEM_START, REG_TELEM_COUNT, telem, &exc), exc};
-    exc = 0;
-    blok[1] = {"alarm", mbReadRegs(BESS_NODE, REG_ALARM_START, REG_ALARM_COUNT, alst, &exc), exc};
-    exc = 0;
-    blok[2] = {"pset", mbReadRegs(BESS_NODE, REG_P_SET, 1, pset, &exc), exc};
-    exc = 0;
-    blok[3] = {"param", mbReadRegs(BESS_NODE, REG_PARAM_START, REG_PARAM_COUNT, param, &exc), exc};
-
+    const struct { const char* nama; uint16_t start, count; uint16_t* out; } blok[4] = {
+        {"telem", REG_TELEM_START, REG_TELEM_COUNT, telem},
+        {"alarm", REG_ALARM_START, REG_ALARM_COUNT, alst},
+        {"pset",  REG_P_SET,       1,               pset},
+        {"param", REG_PARAM_START, REG_PARAM_COUNT, param},
+    };
     ok = true;
     for (int i = 0; i < 4; i++) {
-        if (blok[i].st == MB_OK) continue;
+        uint8_t exc = 0;
+        MbStatus st = mbReadRegs(BESS_NODE, blok[i].start, blok[i].count, blok[i].out, &exc);
+        if (st == MB_OK) continue;
         ok = false;
-        if (blok[i].st == MB_EXCEPTION)
-            Serial.printf("[bess] blok %s: exception 0x%02X\n", blok[i].nama, blok[i].exc);
-        else
-            Serial.printf("[bess] blok %s: gagal (status %d)\n", blok[i].nama, (int)blok[i].st);
+        if (st == MB_EXCEPTION) {
+            // Device menjawab — lanjut ke blok berikutnya supaya kode exception
+            // tiap blok tetap tercatat (alasan short-circuit lama dihapus).
+            Serial.printf("[bess] blok %s: exception 0x%02X\n", blok[i].nama, exc);
+            continue;
+        }
+        Serial.printf("[bess] blok %s: gagal (status %d)\n", blok[i].nama, (int)st);
+        if (st == MB_TIMEOUT) {
+            // Device diam total (3 percobaan tanpa satu byte pun). Blok sisanya
+            // hampir pasti sama, dan mencobanya melipattigakan jendela deteksi
+            // comm_lost (~8 -> ~25 dtk) sambil menahan mb_mtx dari task_cmd.
+            if (i < 3) Serial.println("[bess] blok sisa dilewati (device tak menjawab)");
+            break;
+        }
     }
     if (!ok) return;
     stateLock();

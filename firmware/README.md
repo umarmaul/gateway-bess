@@ -61,11 +61,17 @@ Log boot yang sehat:
 ```
 
 `gw` = MAC address (12 hex, tanpa pemisah) — dipakai sebagai identitas device di
-semua topic MQTT. Percobaan konek MQTT **pertama** setelah boot lazim gagal (DNS
-belum siap sebelum WiFi selesai asosiasi) — esp-mqtt retry otomatis, `[mqtt]
-connected` menyusul dalam beberapa detik; ini bukan bug. Jika BESS/simulator belum
-menyala, `[bess]` akan berkata `COMM_LOST` (bukan macet) setelah **~25 dtk** — lihat
-§"comm_lost" di bawah untuk rinciannya.
+semua topic MQTT. Client MQTT baru di-start begitu WiFi pertama kali tersambung
+(`mqttTick`), jadi tidak ada lagi percobaan connect pertama yang gagal DNS; setelah
+itu esp-mqtt reconnect sendiri. Jika BESS/simulator belum menyala, `[bess]` akan
+berkata `COMM_LOST` (bukan macet) setelah **~8–9 dtk** — lihat §"comm_lost" di bawah.
+
+Kalau boot sebelumnya berakhir crash (panic, termasuk task watchdog), baris ini
+muncul sekali dan ringkasannya ikut telemetri sebagai `last_crash`:
+
+```
+[crash] coredump ditemukan: task=task_cmd pc=0x42001234 mcause=7
+```
 
 ## Arsitektur task (FreeRTOS)
 
@@ -117,6 +123,7 @@ yang baru.
     "boot_count": 12,
     "free_heap_bytes": 301234,
     "min_free_heap_bytes": 287000,
+    "last_crash": null,
     "network": {"ssid": "...", "ip": "192.168.18.52", "rssi_dbm": -54},
     "bess": {
       "grid_voltage_ab_v": 398.2, "grid_voltage_bc_v": 397.9, "grid_voltage_ca_v": 398.5,
@@ -153,6 +160,13 @@ restart sendiri; itu sinyal, bukan derau.
 **`free_heap_bytes` / `min_free_heap_bytes`**: heap bebas saat telemetri dibangun dan
 titik terendahnya sejak boot. `min_free_heap_bytes` yang terus turun antar-telemetri
 (pada `boot_count` yang sama) = kebocoran — terlihat dari cloud sebelum berakhir crash.
+
+**`last_crash`**: `null`, atau `{"task","pc","mcause","boot_count"}` dari coredump
+crash terakhir. Saat boot, coredump di flash diringkas ke NVS lalu dihapus, jadi
+nilainya bertahan lintas reboot sampai crash berikutnya menggantikannya; `boot_count`
+di dalamnya = boot pertama sesudah crash itu. `pc` (hex) dicocokkan ke kode dengan
+`riscv32-esp-elf-addr2line -e .pio/build/esp32c6/firmware.elf <pc>` pada build yang
+sama; `mcause` = kode trap RISC-V. Ini yang dulu hilang pada reboot 13 Agustus.
 
 **Watchdog**: `loop()`, `task_bess`, dan `task_cmd` terdaftar di task watchdog
 (`WDT_TIMEOUT_S`=120 dtk, panic → reboot). Task yang macet lebih lama dari itu memicu
@@ -206,7 +220,8 @@ Alasan tolak (`detail`):
 | `bad_value` | `set_output`/`set_power` tanpa `power_w`, atau `args.target` selain `1` |
 | `comm_lost` | Modbus ke BESS sedang putus (≥3 poll gagal beruntun) — command tidak dicoba sama sekali |
 | `bess_fault` | `enable` ditolak karena BESS sedang dalam kondisi fault |
-| `bess_no_ack` | Tulisan Modbus gagal (timeout/exception non-busy) setelah retry, atau rated power (`3146`) belum pernah terbaca untuk `set_output` |
+| `bess_no_ack` | Tulisan Modbus gagal (timeout/exception non-busy) setelah retry |
+| `rated_unknown` | `set_output`/`set_power` sebelum rated power (`3146`) pernah terbaca — watt tak bisa dikonversi ke persen |
 | `status_timeout` | (dengan `result:"timeout"`) `enable`/`disable` tertulis, tapi bit Run/Shutdown tidak muncul dalam 10 dtk |
 | `bess_busy` | `set_output`/`set_power` ditolak dengan exception Modbus 06 (device sedang di tengah transisi state) |
 | `readback_mismatch` | `set_output`/`set_power` tertulis tapi nilai baca-balik dari register tidak cocok dengan yang ditulis |
@@ -224,15 +239,15 @@ Dinaikkan oleh `task_bess` setelah 3 siklus poll Modbus gagal beruntun
 selagi `comm_lost=true` langsung ditolak (`detail:"comm_lost"`) tanpa mencoba
 Modbus sama sekali, supaya tidak menggantung menunggu bus yang memang sedang mati.
 
-**Biaya waktu nyata: ~25 dtk saat device benar-benar tidak merespons**, bukan sesaat.
-Sejak short-circuit dihapus (paritas dengan firmware rekan kerja), setiap siklus poll
-mencoba **keempat** blok register (telemetri, alarm, setpoint, param) dengan timeout+retry
-penuh masing-masing, bukan berhenti di blok pertama yang gagal — satu siklus poll saat
-bus mati memakan **~7,2 dtk**. Tiga siklus gagal beruntun (`COMM_LOST_AFTER`=3) ditambah
-jeda antar-siklus ~1,5 dtk ⇒ **≈3×7,2 + 1,5 ≈ 24–25 dtk** dari device berhenti merespons
-sampai `comm_lost` naik. Ini naik dari ~8–9 dtk sebelumnya (short-circuit lama berhenti
-di kegagalan pertama per siklus). Tim cloud yang menyetel timeout command dari angka ini
-harus memakai **~25 dtk**, bukan `[bess]` "langsung" seperti kesan di §Prasyarat di atas.
+**Biaya waktu nyata: ~8–9 dtk saat device benar-benar tidak merespons.** Satu siklus
+poll berhenti di blok pertama yang **timeout** (device diam total: 3 percobaan ×
+(500 ms + jeda 105 ms) ≈ 1,8 dtk), tetapi **tetap lanjut** ke blok berikutnya bila
+device menjawab dengan exception — jadi kode exception tiap blok tetap tercatat di log.
+Tiga siklus gagal beruntun (`COMM_LOST_AFTER`=3) + dua jeda antar-siklus 1,5 dtk ⇒
+**≈3×1,8 + 2×1,5 ≈ 8–9 dtk**. (Di `bess-0.1.x` sempat ~25 dtk karena keempat blok
+selalu dicoba penuh walau device diam; itu juga menahan bus dari `task_cmd` sampai
+~7,2 dtk per siklus.) Tim cloud yang menyetel timeout command dari angka ini cukup
+memakai **~10 dtk** untuk deteksi putus, ditambah ≤10 dtk tunggu bukti status.
 
 ## Non-scope fase ini
 

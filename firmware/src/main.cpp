@@ -13,6 +13,7 @@
 #include <Preferences.h>
 #include <esp_system.h>
 #include "reset_info.h"
+#include "crash_log.h"
 #include <esp_task_wdt.h>
 
 // Kalau ESP-IDF pernah menggeser nilai enum-nya, build gagal di sini —
@@ -35,6 +36,7 @@ static_assert(ESP_RST_JTAG     == RESET_JTAG,     "nilai enum reset bergeser");
 
 static char g_reset_reason[24] = "UNKNOWN";
 static uint32_t g_boot_count = 0;
+static CrashInfo g_crash{};
 
 void setup() {
     Serial.begin(115200);           // USB-CDC (COM3)
@@ -66,6 +68,7 @@ void setup() {
     wdt.trigger_panic = true;
     if (esp_task_wdt_reconfigure(&wdt) != ESP_OK) esp_task_wdt_init(&wdt);
     esp_task_wdt_add(nullptr);          // setup() dan loop() = loopTask yang sama
+    crashLogInit(g_boot_count, g_crash);
     pinMode(PIN_LED_WIFI, OUTPUT);
     pinMode(PIN_LED_BESS, OUTPUT);
     stateInit();
@@ -85,6 +88,7 @@ void setup() {
 void loop() {
     esp_task_wdt_reset();
     wifiTick();
+    mqttTick(wifiConnected());
     digitalWrite(PIN_LED_WIFI, wifiConnected() ? HIGH : LOW);
     static uint32_t last = 0;
     if (millis() - last > 5000) {
@@ -107,6 +111,7 @@ void loop() {
         si.boot_count = g_boot_count;
         si.free_heap = esp_get_free_heap_size();
         si.min_free_heap = esp_get_minimum_free_heap_size();
+        si.crash = g_crash;
         si.uptime_ms = millis();
         si.ts = (uint32_t)time(nullptr);   // buildTelemetryJson yang menolkan
         si.rssi = WiFi.RSSI();

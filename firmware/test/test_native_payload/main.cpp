@@ -126,6 +126,41 @@ static void test_telemetry_diagnostik_boot() {
     TEST_ASSERT_EQUAL(42, (int)doc["data"]["boot_count"]);
 }
 
+static void test_telemetry_last_crash_null_bila_tak_ada() {
+    SysInfo s = sys_();
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    // Kunci selalu ada (skema stabil), nilainya null saat tak ada crash tercatat
+    TEST_ASSERT_TRUE(doc["data"]["last_crash"].is<JsonVariantConst>());
+    TEST_ASSERT_TRUE(doc["data"]["last_crash"].isNull());
+}
+
+static void test_telemetry_last_crash_terisi() {
+    // Ringkasan coredump (task, PC, mcause) + boot_count saat crash ditangkap:
+    // reboot misterius bisa didiagnosis dari cloud tanpa kabel serial.
+    SysInfo s = sys_();
+    s.crash.present = true;
+    strcpy(s.crash.task, "task_cmd");
+    s.crash.pc = 0x42001234u;
+    s.crash.mcause = 7;
+    s.crash.boot_count = 41;
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    JsonObject c = doc["data"]["last_crash"];
+    TEST_ASSERT_EQUAL_STRING("task_cmd", c["task"]);
+    TEST_ASSERT_EQUAL_STRING("0x42001234", c["pc"]);
+    TEST_ASSERT_EQUAL(7, (int)c["mcause"]);
+    TEST_ASSERT_EQUAL(41, (int)c["boot_count"]);
+}
+
 static void test_telemetry_heap() {
     // Heap bebas + low-water mark ikut telemetri: kebocoran heap perlahan
     // (penyebab klasik reboot tanpa jejak) terlihat dari cloud sebelum crash.
@@ -294,6 +329,8 @@ int main() {
     RUN_TEST(test_reset_reason_name);
     RUN_TEST(test_telemetry_diagnostik_boot);
     RUN_TEST(test_telemetry_heap);
+    RUN_TEST(test_telemetry_last_crash_null_bila_tak_ada);
+    RUN_TEST(test_telemetry_last_crash_terisi);
     RUN_TEST(test_network_rssi_dbm);
     RUN_TEST(test_ts_nol_saat_ntp_belum_sinkron);
     RUN_TEST(test_ts_diteruskan_saat_ntp_sinkron);

@@ -16,7 +16,11 @@
 // daripada dipotong lalu dijawab bad_json.
 struct RawCmd { char json[CMD_JSON_MAX + 1]; size_t len; bool oversize; };
 static QueueHandle_t q;
-static QueueHandle_t q_luapan;   // 1 slot: perintah yang ditolak karena antrean penuh
+// 1 slot: perintah yang ditolak karena antrean penuh. Invariant yang menjamin
+// ack queue_full tidak menggantung: slot ini HANYA terisi saat antrean utama
+// penuh, jadi antrean utama pasti berisi dan run() pasti bangun lalu menguras
+// luapan sebelum perintah berikutnya.
+static QueueHandle_t q_luapan;
 
 void taskCmdSubmit(const char* json, size_t n) {
     // static: ~2 KB terlalu besar untuk stack task esp-mqtt. Aman karena
@@ -43,7 +47,7 @@ static void sendAck(const Command& c, const char* result, const char* detail,
     size_t n = buildAckJson(c, result, detail, pct, w, nowTs(), buf, sizeof(buf));
     bool sent = mqttPublishAck(buf, n);
     Serial.printf("[cmd] %s -> %s %s%s\n", c.name, result, detail,
-                  sent ? "" : " (ack TIDAK terkirim: mqtt putus)");
+                  sent ? "" : " (ack gagal masuk outbox mqtt)");
 }
 
 static bool waitStatusBit(int bit, bool want, uint32_t timeout_ms) {
@@ -100,7 +104,7 @@ static void doSetPower(const Command& c) {
     float pct = 0.0f;
     bool clamped = false;
     if (!planPowerPct(c.power_w, rated_w, pct, clamped)) {
-        sendAck(c, "rejected", "bess_no_ack");   // rated belum diketahui
+        sendAck(c, "rejected", "rated_unknown");   // 3146 belum pernah terbaca
         return;
     }
     int16_t raw = (int16_t)lroundf(pct * 10.0f);

@@ -1,5 +1,6 @@
 #include "payload.h"
 #include <ArduinoJson.h>
+#include <stdio.h>
 #include "bess_decode.h"
 #include "timeutil.h"
 
@@ -21,6 +22,17 @@ size_t buildTelemetryJson(const SysInfo& s, const BessData& d, char* out, size_t
     data["boot_count"] = s.boot_count;
     data["free_heap_bytes"] = s.free_heap;
     data["min_free_heap_bytes"] = s.min_free_heap;
+    if (s.crash.present) {
+        JsonObject c = data["last_crash"].to<JsonObject>();
+        char pc[11];
+        snprintf(pc, sizeof(pc), "0x%08lX", (unsigned long)s.crash.pc);
+        c["task"] = s.crash.task;
+        c["pc"] = pc;                 // hex string: dicocokkan dgn addr2line/ELF
+        c["mcause"] = s.crash.mcause;
+        c["boot_count"] = s.crash.boot_count;
+    } else {
+        data["last_crash"] = nullptr;
+    }
     JsonObject net = data["network"].to<JsonObject>();
     net["ssid"] = s.ssid; net["ip"] = s.ip; net["rssi_dbm"] = s.rssi;
     JsonObject b = data["bess"].to<JsonObject>();

@@ -68,6 +68,14 @@ void mqttInit(const char* gw) {
     cfg.session.last_will.retain = 1;
     cli = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(cli, MQTT_EVENT_ANY, onEvent, nullptr);
+    // Belum start: dulu start di sini (sebelum WiFi asosiasi) membuat percobaan
+    // connect pertama selalu gagal DNS — log error palsu di setiap boot.
+}
+
+void mqttTick(bool wifi_up) {
+    static bool started = false;
+    if (started || !cli || !wifi_up) return;
+    started = true;               // sesudah ini esp-mqtt reconnect sendiri
     esp_mqtt_client_start(cli);
 }
 
@@ -82,8 +90,11 @@ bool mqttEnqueueTelemetry(const char* json, size_t n) {
 }
 
 bool mqttPublishAck(const char* json, size_t n) {
-    if (!cli || !connected || n == 0) return false;
+    if (!cli || n == 0) return false;
     // enqueue, bukan publish: publish menulis soket di task pemanggil sambil
     // memegang lock client — kalau TX tercekik, task_cmd ikut terblokir.
+    // Tidak digerbang `connected`: saat broker putus sesaat, ack tetap masuk
+    // outbox dan terkirim begitu reconnect (outbox esp-mqtt kedaluwarsa
+    // ~30 dtk), alih-alih hilang dan membuat cloud menunggu selamanya.
     return esp_mqtt_client_enqueue(cli, t_ack, json, n, 1, 0, true) >= 0;
 }

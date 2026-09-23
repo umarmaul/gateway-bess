@@ -15,6 +15,10 @@ void wifiInit() {
     WiFi.setSleep(false);                       // modem sleep OFF (latensi + EMI)
     WiFi.setAutoReconnect(false);               // wifiTick satu-satunya driver
     WiFi.begin(WIFI_SSID, WIFI_PASS);
+    // Beri percobaan pertama jatah backoff penuh. Dulu next_try_ms=0 membuat
+    // wifiTick() pertama langsung disconnect()+begin() lagi di tengah asosiasi
+    // yang sedang berjalan — membuang ~4 dtk di setiap boot.
+    next_try_ms = millis() + backoff_ms;
 }
 
 void wifiTick() {
