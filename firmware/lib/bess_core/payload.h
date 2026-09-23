@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "bess_data.h"
+#include "ota_logic.h"
 
 // Ringkasan crash terakhir (dari coredump di flash, disimpan ke NVS saat boot).
 struct CrashInfo {
@@ -20,6 +21,15 @@ struct CrashInfo {
 // ISR: tanpa alokasi, tanpa printf.
 void wdtTaskListAppend(char* buf, size_t cap, const char* name);
 
+// Snapshot OTA (sub-proyek G) untuk blok data.ota di telemetri -- diisi
+// task_ota (src/), murni data supaya builder tetap testable native.
+struct OtaInfo {
+    char state[16];                          // idle|downloading|verifying|restarting|installed|failed
+    char id[OTA_MANIFEST_ID_MAX + 1];         // "" kalau belum pernah ada job
+    char running_partition[16];               // label partisi yang SEDANG berjalan (app0/app1)
+    bool pending_verify;                      // true = image ini masih PENDING_VERIFY (rollback aktif)
+};
+
 struct SysInfo {
     char gw[13];              // MAC 12 hex + NUL
     const char* fw_version;   // "bess-0.1.0"
@@ -32,6 +42,7 @@ struct SysInfo {
     uint32_t free_heap;              // esp_get_free_heap_size() saat telemetri dibangun
     uint32_t min_free_heap;          // low-water mark sejak boot
     CrashInfo crash;                 // present=false -> "last_crash": null
+    OtaInfo ota;                     // state=="" -> builder melapor "idle" (defensif)
 };
 
 // Builds telemetry JSON per spec §6.1

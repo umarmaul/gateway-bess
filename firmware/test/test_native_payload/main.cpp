@@ -203,6 +203,52 @@ static void test_telemetry_heap() {
     TEST_ASSERT_EQUAL(287000, (int)doc["data"]["min_free_heap_bytes"]);
 }
 
+static void test_telemetry_ota_default_idle() {
+    // src/ selalu mengisi s.ota (task_ota mengembalikan snapshot setiap saat),
+    // tapi builder tetap jujur soal fallback kalau state kosong (defensif).
+    SysInfo s = sys_();
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_STRING("idle", doc["data"]["ota"]["state"]);
+    TEST_ASSERT_EQUAL_STRING("", doc["data"]["ota"]["id"]);
+    TEST_ASSERT_FALSE(doc["data"]["ota"]["pending_verify"].as<bool>());
+}
+
+static void test_telemetry_ota_downloading() {
+    SysInfo s = sys_();
+    strcpy(s.ota.state, "downloading");
+    strcpy(s.ota.id, "ota-20260923-001");
+    strcpy(s.ota.running_partition, "app0");
+    s.ota.pending_verify = false;
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_STRING("downloading", doc["data"]["ota"]["state"]);
+    TEST_ASSERT_EQUAL_STRING("ota-20260923-001", doc["data"]["ota"]["id"]);
+    TEST_ASSERT_EQUAL_STRING("app0", doc["data"]["ota"]["running_partition"]);
+}
+
+static void test_telemetry_ota_pending_verify() {
+    SysInfo s = sys_();
+    strcpy(s.ota.state, "idle");
+    strcpy(s.ota.running_partition, "app1");
+    s.ota.pending_verify = true;
+    BessData d{};
+    static char buf[8192];
+    size_t n = buildTelemetryJson(s, d, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, buf) == DeserializationError::Ok);
+    TEST_ASSERT_TRUE(doc["data"]["ota"]["pending_verify"].as<bool>());
+}
+
 static void test_parse_enable() {
     Command c;
     const char* j = "{\"id\":\"a1\",\"cmd\":\"enable\",\"args\":{}}";
@@ -360,6 +406,9 @@ int main() {
     RUN_TEST(test_telemetry_last_crash_watchdog_menyebut_task_macet);
     RUN_TEST(test_wdt_task_list_append);
     RUN_TEST(test_network_rssi_dbm);
+    RUN_TEST(test_telemetry_ota_default_idle);
+    RUN_TEST(test_telemetry_ota_downloading);
+    RUN_TEST(test_telemetry_ota_pending_verify);
     RUN_TEST(test_ts_nol_saat_ntp_belum_sinkron);
     RUN_TEST(test_ts_diteruskan_saat_ntp_sinkron);
     RUN_TEST(test_ack_ts_nol_saat_ntp_belum_sinkron);

@@ -47,6 +47,11 @@ size_t buildTelemetryJson(const SysInfo& s, const BessData& d, char* out, size_t
     }
     JsonObject net = data["network"].to<JsonObject>();
     net["ssid"] = s.ssid; net["ip"] = s.ip; net["rssi_dbm"] = s.rssi;
+    JsonObject ota = data["ota"].to<JsonObject>();
+    ota["state"] = s.ota.state[0] ? s.ota.state : "idle";
+    ota["id"] = s.ota.id;
+    ota["running_partition"] = s.ota.running_partition;
+    ota["pending_verify"] = s.ota.pending_verify;
     JsonObject b = data["bess"].to<JsonObject>();
     b["grid_voltage_ab_v"] = d.grid_v_ab;
     b["grid_voltage_bc_v"] = d.grid_v_bc;
