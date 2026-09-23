@@ -8,6 +8,7 @@
 #include "modbus_port.h"
 #include "bess_decode.h"
 #include "state.h"
+#include "task_ota.h"
 #include <esp_task_wdt.h>
 
 // Seukuran buffer baca esp-mqtt: semua pesan yang lolos penjaga "pesan
@@ -148,11 +149,16 @@ static void run(void*) {
             if (rejectOversize(luapan)) continue;
             Command lc;
             parseCommand(luapan.json, luapan.len, lc);
-            sendAck(lc, "rejected", "queue_full");
+            // OTA aktif menang atas queue_full: job OTA yang sedang berjalan
+            // lebih informatif buat cloud daripada "antreanmu penuh".
+            sendAck(lc, "rejected", otaInProgress() ? "ota_in_progress" : "queue_full");
         }
         if (rejectOversize(rc)) continue;
         Command c;
         parseCommand(rc.json, rc.len, c);
+        // Selama job OTA aktif, semua command biasa ditolak -- flash sedang
+        // ditulis dan bus RS485/heap sebaiknya tidak dibagi dengan Modbus.
+        if (otaInProgress()) { sendAck(c, "rejected", "ota_in_progress"); continue; }
         // BESS adalah node tunggal. Sebelumnya target diabaikan diam-diam,
         // sehingga perintah untuk node lain dijalankan di node ini.
         if ((c.type == Command::ENABLE || c.type == Command::DISABLE ||

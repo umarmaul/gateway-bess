@@ -5,12 +5,14 @@
 #include "config.h"
 #include "secrets.h"
 #include "task_cmd.h"
+#include "task_ota.h"
 
 static esp_mqtt_client_handle_t cli = nullptr;
 // Ditulis task esp-mqtt, dibaca loop() dan task_cmd — atomic supaya
 // compiler tidak men-cache nilainya di register lintas task.
 static std::atomic<bool> connected{false};
 static char t_telemetry[48], t_status[48], t_command[48], t_ack[52];
+static char t_ota_manifest[56], t_ota_chunk[56], t_ota_ack[56], t_ota_status[56];
 static TaskHandle_t tx_task = nullptr;
 
 static void onEvent(void*, esp_event_base_t, int32_t event_id, void* event_data) {
@@ -20,7 +22,10 @@ static void onEvent(void*, esp_event_base_t, int32_t event_id, void* event_data)
             connected = true;
             esp_mqtt_client_publish(cli, t_status, "online", 0, 1, 1);
             esp_mqtt_client_subscribe(cli, t_command, 1);
-            if (tx_task) xTaskNotifyGive(tx_task);   // kuras ack yang tertahan
+            esp_mqtt_client_subscribe(cli, t_ota_manifest, 1);
+            esp_mqtt_client_subscribe(cli, t_ota_chunk, 1);
+            otaOnMqttConnected();            // mark-valid + status persisted (sekali per boot)
+            if (tx_task) xTaskNotifyGive(tx_task);   // kuras pesan yang tertahan
             Serial.println("[mqtt] connected");
             break;
         case MQTT_EVENT_DISCONNECTED:
@@ -41,6 +46,12 @@ static void onEvent(void*, esp_event_base_t, int32_t event_id, void* event_data)
             if (e->topic_len == (int)strlen(t_command) &&
                 !strncmp(e->topic, t_command, e->topic_len))
                 taskCmdSubmit(e->data, e->data_len);
+            else if (e->topic_len == (int)strlen(t_ota_manifest) &&
+                     !strncmp(e->topic, t_ota_manifest, e->topic_len))
+                taskOtaSubmitManifest(e->data, e->data_len);
+            else if (e->topic_len == (int)strlen(t_ota_chunk) &&
+                     !strncmp(e->topic, t_ota_chunk, e->topic_len))
+                taskOtaSubmitChunk(e->data, e->data_len);
             break;
         }
         default: break;
@@ -52,6 +63,10 @@ void mqttInit(const char* gw) {
     snprintf(t_status, sizeof(t_status), "device/%s/status", gw);
     snprintf(t_command, sizeof(t_command), "device/%s/command", gw);
     snprintf(t_ack, sizeof(t_ack), "device/%s/command/ack", gw);
+    snprintf(t_ota_manifest, sizeof(t_ota_manifest), "device/%s/ota/manifest", gw);
+    snprintf(t_ota_chunk, sizeof(t_ota_chunk), "device/%s/ota/chunk", gw);
+    snprintf(t_ota_ack, sizeof(t_ota_ack), "device/%s/ota/ack", gw);
+    snprintf(t_ota_status, sizeof(t_ota_status), "device/%s/ota/status", gw);
     esp_mqtt_client_config_t cfg = {};
     cfg.broker.address.uri = MQTT_URI;
     // client_id = MAC, sama dengan BEPESP32_WiFi_Extension. Tanpa ini esp-mqtt
@@ -92,34 +107,49 @@ bool mqttConnected() { return connected; }
 // enqueue menunggu MQTT_API_LOCK tanpa batas, dan task esp-mqtt memegang lock
 // itu sepanjang satu iterasi — termasuk tulisan parsial yang terus diulang dan
 // connect (DNS + TCP + CONNACK), yang pada link tercekik bisa > 120 dtk. Kalau
-// loop()/task_cmd memanggilnya langsung, mereka ikut tertahan dan task watchdog
-// me-reboot gateway padahal hanya lambat. Jadi keduanya cuma menitip (tak pernah
-// menunggu lock), dan mqtt_tx — sengaja TIDAK didaftarkan ke watchdog — yang
-// menanggung penantiannya.
+// loop()/task_cmd/task_ota memanggilnya langsung, mereka ikut tertahan dan
+// task watchdog me-reboot gateway padahal hanya lambat. Jadi ketiganya cuma
+// menitip (tak pernah menunggu lock), dan mqtt_tx — sengaja TIDAK didaftarkan
+// ke watchdog — yang menanggung penantiannya.
+//
+// Antrean ini GENERIK sejak sub-proyek G: satu FIFO untuk topic ack/ota_ack/
+// ota_status (dulu khusus ack). item.retain menentukan flag retain per pesan
+// (status OTA retained, ack/ota_ack tidak) -- aturan basi/tahan-sampai-
+// terhubung yang sudah ada untuk ack dipertahankan apa adanya untuk ketiganya.
 // ---------------------------------------------------------------------------
-struct AckItem { uint32_t t_ms; uint16_t n; char json[ACK_JSON_MAX]; };
-static QueueHandle_t q_ack = nullptr;
+struct TxItem { MqttTopic topic_id; bool retain; uint32_t t_ms; uint16_t n; char json[MQTT_TX_JSON_MAX]; };
+static QueueHandle_t q_tx = nullptr;
 static portMUX_TYPE telem_mux = portMUX_INITIALIZER_UNLOCKED;
 static char telem_buf[TELEMETRY_JSON_MAX];   // titipan terbaru (latest wins)
 static size_t telem_n = 0;
 static bool telem_pending = false;
 
+static const char* topicFor(MqttTopic t) {
+    switch (t) {
+        case MQTT_TOPIC_ACK: return t_ack;
+        case MQTT_TOPIC_OTA_ACK: return t_ota_ack;
+        case MQTT_TOPIC_OTA_STATUS: return t_ota_status;
+    }
+    return t_ack;
+}
+
 static void txRun(void*) {
     static char out[TELEMETRY_JSON_MAX];
-    static AckItem it;
+    static TxItem it;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
-        // Ack ditahan di antrean kita sampai terhubung, baru diserahkan ke
+        // Pesan ditahan di antrean kita sampai terhubung, baru diserahkan ke
         // esp-mqtt — outbox esp-mqtt membuang pesan >30 dtk bahkan saat masih
         // menunggu reconnect, jadi titip di sana selagi putus = hilang diam-diam.
-        while (connected && xQueuePeek(q_ack, &it, 0) == pdTRUE) {
-            xQueueReceive(q_ack, &it, 0);
-            if (millis() - it.t_ms > ACK_MAX_AGE_MS) {
-                Serial.println("[mqtt] ack kedaluwarsa dibuang (tertahan > ACK_MAX_AGE_MS)");
+        while (connected && xQueuePeek(q_tx, &it, 0) == pdTRUE) {
+            xQueueReceive(q_tx, &it, 0);
+            if (millis() - it.t_ms > TX_MAX_AGE_MS) {
+                Serial.println("[mqtt] pesan kedaluwarsa dibuang (tertahan > TX_MAX_AGE_MS)");
                 continue;
             }
-            if (esp_mqtt_client_enqueue(cli, t_ack, it.json, it.n, 1, 0, true) < 0)
-                Serial.println("[mqtt] ack ditolak outbox esp-mqtt");
+            const char* topic = topicFor(it.topic_id);
+            if (esp_mqtt_client_enqueue(cli, topic, it.json, it.n, 1, it.retain ? 1 : 0, true) < 0)
+                Serial.printf("[mqtt] pesan ke %s ditolak outbox esp-mqtt\n", topic);
         }
         size_t n = 0;
         portENTER_CRITICAL(&telem_mux);
@@ -135,7 +165,7 @@ static void txRun(void*) {
 }
 
 void mqttTxStart() {
-    q_ack = xQueueCreate(ACK_QUEUE_LEN, sizeof(AckItem));
+    q_tx = xQueueCreate(TX_QUEUE_LEN, sizeof(TxItem));
     xTaskCreate(txRun, "mqtt_tx", 4096, nullptr, 1, &tx_task);
 }
 
@@ -154,13 +184,24 @@ bool mqttEnqueueTelemetry(const char* json, size_t n) {
     return true;
 }
 
-bool mqttPublishAck(const char* json, size_t n) {
-    if (!tx_task || n == 0 || n > ACK_JSON_MAX) return false;
-    static AckItem it;            // hanya dipanggil dari task_cmd
+bool mqttPublish(MqttTopic topic, const char* json, size_t n, bool retain) {
+    if (!tx_task || n == 0 || n > MQTT_TX_JSON_MAX) return false;
+    // TIDAK static: dipanggil dari task_cmd DAN task_ota, bisa benar-benar
+    // bersamaan (dua task berbeda) -- variabel statik bersama akan balapan
+    // saat kedua task menulis sebelum xQueueSend sempat menyalinnya. Item ini
+    // hanya perlu hidup selama panggilan (xQueueSend menyalin isinya), jadi
+    // aman di stack task pemanggil (~1 KB, task_cmd/task_ota punya ruang).
+    TxItem it;
+    it.topic_id = topic;
+    it.retain = retain;
     it.t_ms = millis();
     it.n = (uint16_t)n;
     memcpy(it.json, json, n);
-    if (xQueueSend(q_ack, &it, 0) != pdTRUE) return false;   // antrean penuh
+    if (xQueueSend(q_tx, &it, 0) != pdTRUE) return false;   // antrean penuh
     xTaskNotifyGive(tx_task);
     return true;
+}
+
+bool mqttPublishAck(const char* json, size_t n) {
+    return mqttPublish(MQTT_TOPIC_ACK, json, n, false);
 }

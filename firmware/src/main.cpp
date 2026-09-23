@@ -9,6 +9,7 @@
 #include "payload.h"
 #include "mqtt_link.h"
 #include "task_cmd.h"
+#include "task_ota.h"
 #include "secrets.h"        // WIFI_SSID (dipakai di blok telemetri)
 #include <Preferences.h>
 #include <esp_system.h>
@@ -83,6 +84,7 @@ void setup() {
     Serial.printf("[boot] gw=%s\n", gw);
     mqttTxStart();
     taskCmdStart();
+    taskOtaStart(gw);
     mqttInit(gw);
 }
 
@@ -118,6 +120,7 @@ void loop() {
         si.rssi = WiFi.RSSI();
         si.ssid = WIFI_SSID;
         snprintf(si.ip, sizeof(si.ip), "%s", WiFi.localIP().toString().c_str());
+        otaGetInfo(si.ota);
         stateLock();
         si.seq = ++g_state.seq;
         BessData snapshot = g_state.bess;
