@@ -131,19 +131,25 @@ static bool waitStatusBit(int bit, bool want, uint32_t timeout_ms) {
 }
 
 static void doOnOff(const Command& c, bool on, bool internal) {
-    // Command MANUAL (cloud/operator) mematikan kontrol jadwal -- intervensi
-    // manual menang sampai jadwal diset ulang eksplisit (paritas pola tim).
-    // Command INTERNAL (dari task_auto sendiri, eksekusi jadwal) TIDAK boleh
-    // mematikan jadwalnya sendiri. Dicek regardless hasil Modbus di bawah --
-    // kontrak ack TIDAK berubah (lihat CLAUDE.md task ini), cukup log serial
-    // + field schedule_enabled:false di telemetri berikutnya.
-    if (!internal) schedNotifyManualOverride();
     stateLock();
     bool lost = g_state.bess.comm_lost;
     bool fault = bessFault(g_state.bess);
     stateUnlock();
     if (lost) { sendAck(c, "rejected", "comm_lost"); return; }
     if (on && fault) { sendAck(c, "rejected", "bess_fault"); return; }
+    // Command MANUAL (cloud/operator) mematikan kontrol jadwal -- intervensi
+    // manual menang sampai jadwal diset ulang eksplisit (paritas pola tim).
+    // Command INTERNAL (dari task_auto sendiri, eksekusi jadwal) TIDAK boleh
+    // mematikan jadwalnya sendiri.
+    //
+    // TEMUAN REVIEW 23 Sep 2026 (SEDANG): sebelumnya notifikasi ini dipanggil
+    // di AWAL fungsi, SEBELUM cek comm_lost/fault di atas -- command manual
+    // yang DITOLAK (mis. enable saat comm_lost) tetap mematikan jadwal walau
+    // tidak ada apa pun yang benar-benar dieksekusi ke BESS. Sekarang dipindah
+    // ke SINI: tepat sebelum tulisan Modbus PERTAMA, jadi override jadwal
+    // HANYA terjadi saat command manual benar-benar lolos semua pra-cek dan
+    // akan dieksekusi -- bukan setiap kali command manual sekadar DITERIMA.
+    if (!internal) schedNotifyManualOverride();
     uint8_t exc = 0;
     MbStatus st = MB_TIMEOUT;
     for (int i = 0; i < 20; i++) {                    // busy (exc 6) → coba lagi
@@ -168,7 +174,6 @@ static void doOnOff(const Command& c, bool on, bool internal) {
 }
 
 static void doSetPower(const Command& c, bool internal) {
-    if (!internal) schedNotifyManualOverride();   // lihat komentar di doOnOff
     if (!c.has_power) { sendAck(c, "rejected", "bad_value"); return; }
     if (isnan(c.power_w)) { sendAck(c, "rejected", "bad_value"); return; }
     stateLock();
@@ -182,6 +187,10 @@ static void doSetPower(const Command& c, bool internal) {
         sendAck(c, "rejected", "rated_unknown");   // 3146 belum pernah terbaca
         return;
     }
+    // Lihat komentar panjang di doOnOff -- dipindah ke sini (tepat sebelum
+    // tulisan Modbus pertama) supaya command manual yang ditolak di atas
+    // (bad_value/comm_lost/rated_unknown) TIDAK ikut mematikan jadwal.
+    if (!internal) schedNotifyManualOverride();
     int16_t raw = (int16_t)lroundf(pct * 10.0f);
     uint8_t exc = 0;
     if (mbWrite6(BESS_NODE, REG_P_SET, (uint16_t)raw, &exc) != MB_OK) {
