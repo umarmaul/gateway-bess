@@ -9,7 +9,10 @@ dependencies = ["pyserial>=3.5,<4", "pyyaml>=6,<7"]
 bess-sim = "bess_sim.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8,<9"]
+dev = [
+    "cryptography>=50.0.1",
+    "pytest>=8,<9",
+]
 
 [build-system]
 requires = ["hatchling"]
