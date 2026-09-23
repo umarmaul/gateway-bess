@@ -3,6 +3,8 @@
 #include "prov.h"
 #include "prov_logic.h"
 #include "config.h"
+#include "schedule.h"
+#include "task_auto.h"
 
 static WebServer s_server(80);
 
@@ -174,6 +176,62 @@ static void handleWifiForget() {
 }
 
 // ---------------------------------------------------------------------------
+// GET/POST /api/auto/config -- jadwal + auto-SOC (sub-proyek F). Satu jalur
+// persist (schedApplyAndSave) dibagi dengan command MQTT set_schedule
+// (task_cmd.cpp) -- lihat schedule.h.
+// ---------------------------------------------------------------------------
+static void sendAutoConfig(const SchedConfig& c) {
+    char sh[6], eh[6];
+    schedFormatHHMM(c.start_min, sh);
+    schedFormatHHMM(c.end_min, eh);
+    AutoInfo info{};
+    autoGetInfo(info);
+    char buf[320];
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":true,\"enabled\":%s,\"threshold\":%.1f,\"recovery\":%.1f,"
+             "\"start\":\"%s\",\"end\":\"%s\",\"tz_offset\":%d,\"power_w\":%.1f,"
+             "\"in_window\":%s,\"battery_ready\":%s}",
+             c.enabled ? "true" : "false", c.soc_stop_pct, c.soc_recovery_pct,
+             sh, eh, c.tz_offset_min, c.power_w,
+             info.in_window ? "true" : "false", info.battery_ready ? "true" : "false");
+    sendJson(200, buf);
+}
+
+static void handleAutoConfigGet() {
+    sendAutoConfig(schedGetConfig());
+}
+
+static void handleAutoConfigPost() {
+    if (!checkCode()) return;
+    SchedSetInput in{};
+    bool bad_hhmm = false;
+    if (s_server.hasArg("enabled")) {
+        String v = s_server.arg("enabled");
+        in.has_enabled = true;
+        in.enabled = (v == "1" || v == "true");
+    }
+    if (s_server.hasArg("start")) {
+        int m;
+        if (schedParseHHMM(s_server.arg("start").c_str(), m)) { in.has_start = true; in.start_min = m; }
+        else bad_hhmm = true;
+    }
+    if (s_server.hasArg("end")) {
+        int m;
+        if (schedParseHHMM(s_server.arg("end").c_str(), m)) { in.has_end = true; in.end_min = m; }
+        else bad_hhmm = true;
+    }
+    if (s_server.hasArg("threshold")) { in.has_soc_stop = true; in.soc_stop_pct = s_server.arg("threshold").toFloat(); }
+    if (s_server.hasArg("recovery")) { in.has_soc_recovery = true; in.soc_recovery_pct = s_server.arg("recovery").toFloat(); }
+    if (s_server.hasArg("power_w")) { in.has_power = true; in.power_w = s_server.arg("power_w").toFloat(); }
+    if (s_server.hasArg("tz_offset")) { in.has_tz = true; in.tz_offset_min = s_server.arg("tz_offset").toInt(); }
+    if (bad_hhmm) { sendErr(400, "bad_hhmm"); return; }
+
+    SchedConfig applied{};
+    schedApplyAndSave(in, applied);
+    sendAutoConfig(applied);
+}
+
+// ---------------------------------------------------------------------------
 // 404 -- captive portal: klien lewat AP diarahkan ke /wifi
 // ---------------------------------------------------------------------------
 static void handleNotFound() {
@@ -190,6 +248,8 @@ void webInit() {
     s_server.on("/api/wifi/save", HTTP_POST, handleWifiSave);
     s_server.on("/api/wifi/ap", HTTP_POST, handleWifiAp);
     s_server.on("/api/wifi/forget", HTTP_POST, handleWifiForget);
+    s_server.on("/api/auto/config", HTTP_GET, handleAutoConfigGet);
+    s_server.on("/api/auto/config", HTTP_POST, handleAutoConfigPost);
     s_server.onNotFound(handleNotFound);
     s_server.begin();
     Serial.println("[web] server HTTP mulai (port 80)");

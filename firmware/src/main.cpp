@@ -10,7 +10,9 @@
 #include "mqtt_link.h"
 #include "task_cmd.h"
 #include "task_ota.h"
+#include "task_auto.h"
 #include "prov.h"
+#include "schedule.h"
 #include "web.h"
 #include <Preferences.h>
 #include <esp_system.h>
@@ -74,6 +76,7 @@ void setup() {
     pinMode(PIN_LED_WIFI, OUTPUT);
     pinMode(PIN_LED_BESS, OUTPUT);
     stateInit();
+    schedInit();                // sub-proyek F: muat jadwal dari NVS app_cfg (atau default)
     provInit();                 // sub-proyek E: gateway_code + wifi_cfg SEBELUM wifiInit()
     ProvStaticIp sip = provStaticIp();
     if (sip.enabled) wifiSetStaticIp(sip.ip, sip.gw, sip.mask, sip.dns1, sip.dns2);
@@ -89,6 +92,7 @@ void setup() {
     Serial.printf("[boot] gw=%s\n", gw);
     mqttTxStart();
     taskCmdStart();
+    taskAutoStart();            // sub-proyek F: SETELAH taskCmdStart() -- butuh antreannya sudah ada
     taskOtaStart(gw);
     mqttInit(gw);
 }
@@ -130,6 +134,7 @@ void loop() {
         si.mdns = provMdnsHostname();
         snprintf(si.ip, sizeof(si.ip), "%s", WiFi.localIP().toString().c_str());
         otaGetInfo(si.ota);
+        autoGetInfo(si.auto_info);   // sub-proyek F: blok data.auto
         stateLock();
         si.seq = ++g_state.seq;
         BessData snapshot = g_state.bess;

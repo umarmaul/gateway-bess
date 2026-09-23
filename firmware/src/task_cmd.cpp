@@ -9,13 +9,16 @@
 #include "bess_decode.h"
 #include "state.h"
 #include "task_ota.h"
+#include "schedule.h"
 #include <esp_task_wdt.h>
 
 // Seukuran buffer baca esp-mqtt: semua pesan yang lolos penjaga "pesan
 // terpotong" di mqtt_link muat utuh. oversize tetap dijaga untuk berjaga-jaga
 // kalau kedua konstanta suatu saat tak sinkron — lebih baik ditolak jujur
 // daripada dipotong lalu dijawab bad_json.
-struct RawCmd { char json[CMD_JSON_MAX + 1]; size_t len; bool oversize; };
+// internal=true kalau ini command yang diantrekan task_auto (bukan cloud) --
+// lihat schedule.h: command internal TIDAK menonaktifkan jadwal.
+struct RawCmd { char json[CMD_JSON_MAX + 1]; size_t len; bool oversize; bool internal; };
 static QueueHandle_t q;
 // 1 slot: perintah yang ditolak karena antrean penuh. Invariant yang menjamin
 // ack queue_full tidak menggantung: slot ini HANYA terisi saat antrean utama
@@ -23,22 +26,29 @@ static QueueHandle_t q;
 // luapan sebelum perintah berikutnya.
 static QueueHandle_t q_luapan;
 
-void taskCmdSubmit(const char* json, size_t n) {
-    // static: ~2 KB terlalu besar untuk stack task esp-mqtt. Aman karena
-    // fungsi ini hanya dipanggil dari satu task (event handler esp-mqtt) dan
-    // xQueueSend menyalin isinya sebelum kembali.
-    static RawCmd rc;
+static void submit(const char* json, size_t n, bool internal) {
+    // static: ~2 KB terlalu besar untuk stack pemanggil (event handler
+    // esp-mqtt untuk taskCmdSubmit, task_auto untuk taskCmdSubmitInternal).
+    // Storage static terpisah per fungsi pemanggil (lihat definisi di bawah)
+    // -- aman karena tiap fungsi hanya dipanggil dari SATU task masing-masing
+    // dan xQueueSend menyalin isinya sebelum kembali.
+    static RawCmd rc_ext, rc_int;
+    RawCmd& rc = internal ? rc_int : rc_ext;
+    rc.internal = internal;
     rc.oversize = n > CMD_JSON_MAX;
     rc.len = rc.oversize ? 0 : n;
     memcpy(rc.json, json, rc.len);
     rc.json[rc.len] = 0;
     if (xQueueSend(q, &rc, 0) == pdTRUE) return;
-    // Antrean utama penuh. JSON tidak boleh di-parse di sini (ini task jaringan
-    // esp-mqtt), jadi payload mentah dititipkan ke slot luapan; task_cmd yang
-    // mem-parse id-nya dan membalas queue_full.
+    // Antrean utama penuh. JSON tidak boleh di-parse di sini (task jaringan
+    // esp-mqtt atau task_auto), jadi payload mentah dititipkan ke slot
+    // luapan; task_cmd yang mem-parse id-nya dan membalas queue_full.
     if (xQueueSend(q_luapan, &rc, 0) != pdTRUE)
         Serial.println("[cmd] dibuang: antrean utama dan luapan penuh");
 }
+
+void taskCmdSubmit(const char* json, size_t n) { submit(json, n, false); }
+void taskCmdSubmitInternal(const char* json, size_t n) { submit(json, n, true); }
 
 static uint32_t nowTs() { return (uint32_t)time(nullptr); }
 
@@ -48,6 +58,18 @@ static void sendAck(const Command& c, const char* result, const char* detail,
     size_t n = buildAckJson(c, result, detail, pct, w, nowTs(), buf, sizeof(buf));
     bool sent = mqttPublishAck(buf, n);
     Serial.printf("[cmd] %s -> %s %s%s\n", c.name, result, detail,
+                  sent ? "" : " (ack DIBUANG: antrean mqtt_tx penuh)");
+}
+
+// set_schedule punya bentuk "applied" sendiri (config jadwal, bukan
+// power_pct/power_w) -- builder terpisah di sched_logic (schedBuildAck),
+// sama pola dengan otaBuildAck/otaBuildStatus milik sub-proyek G.
+static void sendScheduleAck(const Command& c, const char* result, const char* detail,
+                             const SchedConfig& applied) {
+    static char buf[ACK_JSON_MAX];
+    size_t n = schedBuildAck(c.id, result, detail, applied, nowTs(), buf, sizeof(buf));
+    bool sent = mqttPublishAck(buf, n);
+    Serial.printf("[cmd] set_schedule -> %s %s%s\n", result, detail,
                   sent ? "" : " (ack DIBUANG: antrean mqtt_tx penuh)");
 }
 
@@ -64,7 +86,14 @@ static bool waitStatusBit(int bit, bool want, uint32_t timeout_ms) {
     return false;
 }
 
-static void doOnOff(const Command& c, bool on) {
+static void doOnOff(const Command& c, bool on, bool internal) {
+    // Command MANUAL (cloud/operator) mematikan kontrol jadwal -- intervensi
+    // manual menang sampai jadwal diset ulang eksplisit (paritas pola tim).
+    // Command INTERNAL (dari task_auto sendiri, eksekusi jadwal) TIDAK boleh
+    // mematikan jadwalnya sendiri. Dicek regardless hasil Modbus di bawah --
+    // kontrak ack TIDAK berubah (lihat CLAUDE.md task ini), cukup log serial
+    // + field schedule_enabled:false di telemetri berikutnya.
+    if (!internal) schedNotifyManualOverride();
     stateLock();
     bool lost = g_state.bess.comm_lost;
     bool fault = bessFault(g_state.bess);
@@ -94,7 +123,8 @@ static void doOnOff(const Command& c, bool on) {
     else sendAck(c, "timeout", "status_timeout");
 }
 
-static void doSetPower(const Command& c) {
+static void doSetPower(const Command& c, bool internal) {
+    if (!internal) schedNotifyManualOverride();   // lihat komentar di doOnOff
     if (!c.has_power) { sendAck(c, "rejected", "bad_value"); return; }
     if (isnan(c.power_w)) { sendAck(c, "rejected", "bad_value"); return; }
     stateLock();
@@ -123,6 +153,20 @@ static void doSetPower(const Command& c) {
     float applied_pct = raw / 10.0f;
     sendAck(c, clamped ? "clamped" : "accepted", "",
             applied_pct, applied_pct / 100.0f * rated_w);
+}
+
+static void doSetSchedule(const Command& c) {
+    if (c.sched_bad_input) {
+        // start_hhmm/end_hhmm bukan "HH:MM" valid, atau power_w NaN --
+        // ditolak TANPA menyentuh config tersimpan (schedApplyAndSave TIDAK
+        // dipanggil sama sekali). "applied" melaporkan config SAAT INI (tak
+        // ada yang berubah), bukan input yang ditolak.
+        sendScheduleAck(c, "rejected", "bad_value", schedGetConfig());
+        return;
+    }
+    SchedConfig applied{};
+    SchedSetResult r = schedApplyAndSave(c.sched, applied);
+    sendScheduleAck(c, r == SchedSetResult::CLAMPED ? "clamped" : "accepted", "", applied);
 }
 
 // Pesan melebihi CMD_JSON_MAX tidak bisa di-parse (id-nya pun tak diketahui),
@@ -167,9 +211,10 @@ static void run(void*) {
             continue;
         }
         switch (c.type) {
-            case Command::ENABLE:  doOnOff(c, true); break;
-            case Command::DISABLE: doOnOff(c, false); break;
-            case Command::SET_POWER: doSetPower(c); break;
+            case Command::ENABLE:  doOnOff(c, true, rc.internal); break;
+            case Command::DISABLE: doOnOff(c, false, rc.internal); break;
+            case Command::SET_POWER: doSetPower(c, rc.internal); break;
+            case Command::SET_SCHEDULE: doSetSchedule(c); break;
             case Command::BAD_JSON: sendAck(c, "rejected", "bad_json"); break;
             default: sendAck(c, "rejected", "unsupported_cmd"); break;
         }
