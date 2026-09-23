@@ -12,10 +12,18 @@ class BessSim:
         self.sm = StateMachine()
         self.slave = ModbusSlave(node, self.regs, self._coil, self.sm.busy)
         self._forced_alarms: dict[tuple[int, int], int] = {}
+        # Alarm yang memicu FAULT dan masih aktif. FAULT hanya bisa direset
+        # (FC5 OFF) setelah himpunan ini kosong.
+        self._trip_causes: set[tuple[int, int]] = set()
+        # Alarm proteksi otomatis bersifat latch: dibersihkan oleh reset itu
+        # sendiri, bukan oleh kondisinya (SOC tidak bisa pulih selama FAULT).
+        self._latched: set[tuple[int, int]] = set()
         self.regs.set_raw(ID_SOC, round(self.physics.soc * 1000))
 
     def _coil(self, id_: int, on: bool):
         if id_ == 5050:
+            if not on and self.sm.state == St.FAULT:
+                self._reset_fault()
             self.sm.power_on() if on else self.sm.power_off()
         elif id_ == 5051:
             self.sm.standby(on)
@@ -26,13 +34,30 @@ class BessSim:
     def set_alarm(self, reg_id: int, bit: int, value: int, trip: bool = False):
         self._forced_alarms[(reg_id, bit)] = value
         if value and trip:
+            self._trip_causes.add((reg_id, bit))
             self.sm.trip()
+        elif not value:
+            self._trip_causes.discard((reg_id, bit))
+
+    def _reset_fault(self):
+        # PDF tidak mendefinisikan reset fault. Asumsi simulator: FC5 OFF saat
+        # FAULT = reset, hanya berhasil bila tak ada penyebab trip yang masih
+        # aktif (alarm skenario harus dibersihkan dulu).
+        for key in self._latched:
+            self.set_alarm(*key, 0)
+        self._latched.clear()
+        if not self._trip_causes:
+            self.sm.clear_fault()
 
     def tick(self, dt_s: float):
         rated_kw = self.regs.get(ID_RATED) / 10.0
         setpoint_kw = self.regs.get_signed(ID_P_SET) / 1000.0 * rated_kw
         rate = self.regs.get(3062)
         self.sm.tick(dt_s)
+        if self.sm.state in (St.FAULT, St.EPO, St.STOP, St.STANDBY):
+            # Relay AC terbuka: tak ada jalur daya, jadi daya langsung nol —
+            # bukan meluruh mengikuti laju 3062 (yang bisa 1 %/s).
+            self.physics.p_ac_kw = 0.0
         self.physics.step(dt_s, setpoint_kw, rate, rated_kw, self.sm.running())
         self._auto_protect()
         self._map_to_regs(rated_kw)
@@ -40,8 +65,10 @@ class BessSim:
     def _auto_protect(self):
         p = self.physics
         if p.soc <= 0.02 and p.p_ac_kw > 0:
+            self._latched.add((2055, 14))
             self.set_alarm(2055, 14, 1, trip=True)     # battery over-discharge
         if p.soc >= 0.98 and p.p_ac_kw < 0:
+            self._latched.add((2055, 13))
             self.set_alarm(2055, 13, 1, trip=True)     # battery over-charge
 
     def _map_to_regs(self, rated_kw: float):

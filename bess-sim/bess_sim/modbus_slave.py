@@ -48,9 +48,12 @@ class ModbusSlave:
     def _write_word(self, fc, body, frame):
         if len(body) != 5:
             raise ModbusError(3)
-        if self.busy_fn():
-            raise ModbusError(6)
         id_, data = self._u16(body, 1), self._u16(body, 3)
+        # Perintah OFF ke 5050 selalu diterima, termasuk di tengah sekuens
+        # start: menolak stop dengan "busy" tidak pernah jadi perilaku yang
+        # aman, dan state machine memang punya cabang PRECHARGE..RELAY -> STOPPING.
+        if self.busy_fn() and not (id_ == 5050 and data == 0x0000):
+            raise ModbusError(6)
         if id_ in COILS:
             if data not in (0xFF00, 0x0000):
                 raise ModbusError(3)

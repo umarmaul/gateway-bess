@@ -18,3 +18,13 @@ def test_dua_frame_terpisah():
     f2 = fs.feed(bytes.fromhex("FF00A95B"), 0.101)
     assert f2 == []
     assert fs.feed(b"", 0.110) == [bytes.fromhex("010513BAFF00A95B")]
+
+
+def test_default_tahan_jitter_usb():
+    """Dongle USB + timer Windows (tick ~15,6 ms) bisa menyerahkan satu query
+    8 byte dalam dua potongan berjarak >4 ms. Spec menjamin jeda >=100 ms antar
+    frame, jadi ambang default boleh jauh lebih longgar dari 3,5 karakter."""
+    fs = FrameSplitter()
+    assert fs.feed(bytes.fromhex("010513BA"), 0.000) == []
+    assert fs.feed(bytes.fromhex("FF00A95B"), 0.016) == []
+    assert fs.feed(b"", 0.060) == [bytes.fromhex("010513BAFF00A95B")]

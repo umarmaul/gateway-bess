@@ -34,8 +34,14 @@ def main():
         if m.topic.endswith("/status"):
             print(f"{stamp()} status = {m.payload.decode()!r} retain={m.retain}", flush=True)
             return
-        d = json.loads(m.payload)["data"]
-        doc = json.loads(m.payload)
+        # Exception di callback mematikan thread loop paho diam-diam — pesan
+        # rusak cukup dilaporkan, pengamatan harus jalan terus.
+        try:
+            doc = json.loads(m.payload)
+            d = doc["data"]
+        except (ValueError, KeyError, TypeError) as e:
+            print(f"{stamp()} telemetri tak terbaca ({e!r}, {len(m.payload)} B)", flush=True)
+            return
         print(f"{stamp()} telemetri seq={doc['seq']} boot={d.get('boot_count')} "
               f"reset={d.get('last_reset_reason')} uptime_ms={d.get('uptime_ms')} "
               f"({len(m.payload)} B)", flush=True)

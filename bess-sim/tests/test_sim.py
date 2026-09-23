@@ -118,3 +118,72 @@ def test_status_word_tahapan_via_register_2057():
     assert w & (1 << 2), f"RUN harus punya bit2, got {bin(w)}"
     assert w & (1 << 3), f"RUN harus punya bit3, got {bin(w)}"
     assert w & (1 << 6), f"RUN harus punya bit6 (run), got {bin(w)}"
+
+
+# --- temuan audit 23 Sep 2026 ---
+
+def test_arus_grid_idle_tidak_pernah_wrap():
+    """1053-1055 (dan salinannya 1093-1095) UINT16 menurut PDF. Noise di sekitar
+    0 A tidak boleh jadi -1 -> 0xFFFF (terbaca 6553,5 A oleh gateway)."""
+    sim = BessSim(soc=0.5, seed=1)
+    for _ in range(400):
+        sim.tick(0.1)
+        for v in read(sim, 1053, 3) + read(sim, 1093, 3):
+            assert v < 0x8000, hex(v)
+
+def test_stop_diterima_saat_startup():
+    """Perintah OFF tidak boleh ditolak busy di tengah precharge/soft-start:
+    cabang power_off untuk tahap itu sudah ada di state machine."""
+    sim = BessSim(soc=0.5)
+    sim.handle_frame(ON)
+    tick(sim, 0.5)
+    assert sim.sm.state == St.PRECHARGE
+    assert sim.handle_frame(OFF) == OFF
+    tick(sim, 3)
+    assert sim.sm.state == St.STOP
+    assert read(sim, 1060, 1)[0] == 0
+
+def test_on_tetap_busy_saat_startup():
+    sim = BessSim(soc=0.5)
+    sim.handle_frame(ON)
+    tick(sim, 0.5)
+    assert sim.handle_frame(ON)[:3] == bytes([1, 0x85, 6])
+
+def test_fault_direset_lewat_off_setelah_alarm_bersih():
+    sim = BessSim(soc=0.5)
+    sim.handle_frame(ON); tick(sim, 3.5)
+    sim.set_alarm(2052, 1, 1, trip=True)
+    tick(sim, 1)
+    sim.handle_frame(OFF); tick(sim, 1)
+    assert sim.sm.state == St.FAULT         # penyebab masih aktif -> tetap FAULT
+    sim.set_alarm(2052, 1, 0)
+    tick(sim, 1)
+    sim.handle_frame(OFF); tick(sim, 1)
+    assert sim.sm.state == St.STOP
+    w = read(sim, 2057, 1)[0]
+    assert not w & (1 << 7) and w & (1 << 11)
+    sim.handle_frame(ON); tick(sim, 3.5)
+    assert sim.sm.state == St.RUN
+
+def test_over_discharge_bisa_direset_lalu_charge():
+    sim = BessSim(soc=0.021)
+    sim.handle_frame(ON); tick(sim, 3.5)
+    sim.handle_frame(append_crc(bytes([1, 6, 0x0B, 0xEA, 0x03, 0xE8])))  # 100%
+    tick(sim, 60)
+    assert sim.sm.state == St.FAULT
+    sim.handle_frame(OFF); tick(sim, 1)
+    assert sim.sm.state == St.STOP
+    assert not read(sim, 2055, 1)[0] & (1 << 14)
+    sim.handle_frame(append_crc(bytes([1, 6, 0x0B, 0xEA, 0xFF, 0x38])))  # -20% charge
+    sim.handle_frame(ON); tick(sim, 10)
+    assert sim.sm.state == St.RUN
+
+def test_daya_langsung_nol_saat_fault_walau_rate_kecil():
+    sim = BessSim(soc=0.5)
+    sim.handle_frame(append_crc(bytes([1, 6, 0x0B, 0xF6, 0x00, 0x01])))  # 3062 = 1 %/s
+    sim.handle_frame(append_crc(bytes([1, 6, 0x0B, 0xEA, 0x00, 0xC8])))  # 20%
+    sim.handle_frame(ON); tick(sim, 3.5 + 15)
+    assert read(sim, 1060, 1)[0] > 50
+    sim.set_alarm(2052, 1, 1, trip=True)
+    tick(sim, 0.2)
+    assert read(sim, 1060, 1)[0] == 0

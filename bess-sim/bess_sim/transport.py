@@ -7,7 +7,11 @@ log = logging.getLogger("bess_sim")
 
 
 class FrameSplitter:
-    def __init__(self, gap_s: float = 0.004):
+    # 30 ms, bukan 3,5 karakter (~4 ms): dongle USB-serial dan timer Windows
+    # (tick ~15,6 ms) menyerahkan byte berkelompok, sehingga satu query bisa
+    # tiba dalam dua potongan berjarak >4 ms lalu gagal CRC -> exception 03.
+    # Spec menjamin jeda >=100 ms antar frame, jadi 30 ms masih jauh aman.
+    def __init__(self, gap_s: float = 0.030):
         self.gap_s = gap_s
         self._buf = bytearray()
         self._last = None
@@ -37,8 +41,10 @@ class SerialServer:
         self._last_frame_end = 0.0
 
     def run_once(self):
-        now = time.monotonic()
         data = self.ser.read(256)
+        # Stempel SESUDAH read(): read() memblokir sampai timeout, jadi waktu
+        # sebelum read selalu lebih awal dari kedatangan byte sebenarnya.
+        now = time.monotonic()
         for frame in self._split.feed(data, now):
             gap = now - self._last_frame_end
             self._last_frame_end = now
@@ -52,4 +58,8 @@ class SerialServer:
                 time.sleep(self._rng.uniform(*self.delay))
                 self.ser.write(resp)
                 self.ser.flush()
+                # Dongle yang meng-echo TX-nya sendiri akan menyerahkan balasan
+                # kita sebagai "query" baru; echo FC5/FC6 identik dengan query
+                # sehingga dieksekusi ulang tanpa akhir. Buang sisa input.
+                self.ser.reset_input_buffer()
                 self._last_frame_end = time.monotonic()

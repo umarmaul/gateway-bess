@@ -50,8 +50,11 @@ class Physics:
     def grid(self) -> dict:
         n = lambda a: self._rng.uniform(-a, a)
         i_ph = abs(self.p_ac_kw) * 1000.0 / (math.sqrt(3) * 400.0)
+        # Register arus UINT16: noise di sekitar 0 A tidak boleh negatif, atau
+        # set_raw membungkusnya jadi 0xFFFF (6553,5 A di sisi gateway).
+        i = lambda: max(0.0, i_ph + n(0.2))
         return {
             "v_ab": 400.0 + n(1.5), "v_bc": 400.0 + n(1.5), "v_ca": 400.0 + n(1.5),
-            "i_a": i_ph + n(0.2), "i_b": i_ph + n(0.2), "i_c": i_ph + n(0.2),
+            "i_a": i(), "i_b": i(), "i_c": i(),
             "f_a": 50.0 + n(0.02), "f_b": 50.0 + n(0.02), "f_c": 50.0 + n(0.02),
         }

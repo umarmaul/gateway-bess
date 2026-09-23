@@ -145,7 +145,10 @@ simulator pun tidak boleh menambahkannya.
    `PRECHARGE`/`SOFTSTART`/`RELAY`/`STOPPING` (~1 dtk per tahap, lihat
    `state_machine.py`), tulisan ke register kontrol bisa ditolak dengan
    exception `06` sesekali — meniru device fisik yang tidak menerima perintah
-   baru di tengah sekuens precharge/relay. Firmware gateway sudah menghormati
+   baru di tengah sekuens precharge/relay. **Pengecualian: FC5 OFF
+   (`5050=0x0000`) selalu diterima** — perintah stop di tengah sekuens start
+   langsung membawa state ke `STOPPING`; menolak stop dengan "busy" tidak
+   pernah jadi perilaku yang aman untuk ditiru. Firmware gateway sudah menghormati
    ini (retry dengan jeda saat exception 6, lihat `../firmware/README.md`
    §arsitektur task, fungsi `doOnOff`/`doSetPower`).
 3. **`--strict-timing`.** Spec protokol mewajibkan jeda antar-frame ≥100 ms
@@ -159,7 +162,22 @@ simulator pun tidak boleh menambahkannya.
    persisten — sesuai catatan protokol bahwa akumulator ini adalah nilai
    sesi/lifetime device, dan simulator tidak punya penyimpanan persisten
    antar-restart (state selalu in-memory).
-5. **Identitas jujur, kabel setia**: simulator menandai dirinya sendiri di log
+5. **Fault latch + reset lewat OFF (asumsi — PDF tidak mengatur reset fault).**
+   Alarm dengan `trip` membawa state ke `FAULT` (bit 7 status, daya langsung 0
+   karena relay AC terbuka — tidak meluruh mengikuti laju `3062`). `FAULT`
+   bertahan sampai master mengirim FC5 OFF **dan** tidak ada penyebab trip yang
+   masih aktif; alarm skenario harus di-`clear_alarm` dulu. Alarm proteksi
+   otomatis (over-discharge/over-charge) bersifat latch dan ikut dibersihkan
+   oleh reset itu. Sesudahnya state `STOP` dan `enable` bisa dipakai lagi.
+6. **Arus fase tak pernah negatif.** Register `1053–1055`/`1093–1095` UINT16
+   menurut PDF; noise di sekitar 0 A di-clamp ke 0 (dulu bisa terbungkus jadi
+   `0xFFFF` = 6553,5 A di telemetri gateway).
+7. **Pemotong frame 30 ms.** Frame dianggap selesai setelah bus sunyi 30 ms (bukan
+   3,5 karakter ≈ 4 ms): dongle USB-serial dan timer Windows menyerahkan byte
+   berkelompok sehingga satu query bisa tiba dalam dua potongan. Spec menjamin
+   jeda ≥100 ms antar frame, jadi ambang ini tetap aman. Setelah membalas,
+   simulator membuang input sisa (dongle yang meng-echo TX-nya sendiri).
+8. **Identitas jujur, kabel setia**: simulator menandai dirinya sendiri di log
    terminal (`bess-sim AKTIF di COM10 node 1 (SIMULATOR — bukan device asli)`)
    dan CLI — tapi tidak ada apa pun di frame Modbus yang membocorkan hal itu ke
    gateway atau ke cloud.
@@ -167,7 +185,7 @@ simulator pun tidak boleh menambahkannya.
 ## Test
 
 ```bash
-uv run pytest -v       # 57 test: CRC (vektor persis PDF), register map,
+uv run pytest -v       # 64 test: CRC (vektor persis PDF), register map,
                         # fisika, state machine, alarm/skenario, transport, CLI
 uv run bess-sim selftest
 ```
